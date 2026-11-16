@@ -355,7 +355,11 @@ pub fn pack_ordered(
         })
     }
   }
-  let placements = slots_to_placements(packer.placed, cargos)
+  let placements = balance_load(
+    unit,
+    slots_to_placements(packer.placed, cargos),
+    cargos,
+  )
   let metrics = compute_metrics(unit, cargos, placements)
   let violations = verify(unit, cargos, placements, rules)
   {

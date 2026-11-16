@@ -10,6 +10,10 @@ pub const MM_PER_M : Int32 = 1000
 
 pub fn axle_loads(LoadUnit, Array[Placement], Array[Cargo]) -> Array[Int32]
 
+pub fn balance_load(LoadUnit, Array[Placement], Array[Cargo]) -> Array[Placement]
+
+pub fn balance_shift(LoadUnit, Array[Placement], Array[Cargo]) -> (Int32, Int32)
+
 pub fn cartonize(Array[CartonSpec], Array[Cargo], StowRules) -> Cartonization
 
 pub fn center_of_gravity(Array[Placement], Array[Cargo]) -> Point3?

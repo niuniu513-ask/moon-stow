@@ -8,8 +8,8 @@
 moon version --all      # 记录工具链版本
 moon check              # 0 error, 0 warning
 moon build              # 构建全部包与示例
-moon test               # 32 个测试全部通过
-moon fmt                # 格式化后 git diff 应为空
+moon test               # 35 个测试全部通过
+moon fmt --check        # 格式化检查
 moon run examples/quickstart
 ```
 
@@ -28,6 +28,7 @@ moon run examples/quickstart
 | 载重上限 | `pack_scenarios.mbt` | 超过 `max_payload_g` 的货物不再放置 |
 | 危险品净距 | `pack_scenarios.mbt` | 爆炸品与氧化剂 3 m 净距下只允许放一件 |
 | 轴荷与重心 | `stability.mbt`、`verify.mbt` | 杠杆分配、重心偏移带越界告警 |
+| 装载配平 | `stability.mbt` | 角落单件被滑到地板中心、重心偏移归零；整车按轴距中点配平；贴墙满宽货件不再移动 |
 | 越站顺序 | `pack_scenarios.mbt` | 门口被后送货物占据时报 error |
 | 确定性 | `pack_scenarios.mbt` | 同一输入两次装箱得到逐字段相同的布局 |
 | 托盘码垛 | `palletize.mbt` | 6 件 400×300×300 在欧标托盘上全部放下且无违规 |
@@ -42,9 +43,12 @@ moon run examples/quickstart
    因此"自动计划无 error"与"校验器无 error"必须一致。
 2. **失败可见**：装不进的货物进入 `plan.unplaced`，附 `no feasible position left in the unit`
    或 `does not fit in a shelf layer`，不会被静默丢弃。
-3. **可比较**：`compute_metrics` 对任意放置列表（包括人工调整的）都能重算体积率、重量率、
+3. **装完自动配平**：`pack` 与 `palletize` 在产出计划前对整批货做一次平移，把重心挪到平衡点
+   （有轴的车按轴距中点，其余按地板中心），平移量被自由空间夹住；平移不改变相对几何，
+   所以支撑、堆码、隔离与越站的判定与平移前一致（有测试锁定）。
+4. **可比较**：`compute_metrics` 对任意放置列表（包括人工调整的）都能重算体积率、重量率、
    重心、堆高与分站重量，便于比较两种策略（见 `examples/pallet`）。
-4. **确定性**：所有排序键以 `id` 兜底，两次运行布局逐字段相同（有测试锁定）。
+5. **确定性**：所有排序键以 `id` 兜底，两次运行布局逐字段相同（有测试锁定）。
 
 ## 已知边界
 

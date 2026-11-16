@@ -23,7 +23,6 @@ pub fn palletize(
   while z < envelope.height && rounds < 200 {
     rounds = rounds + 1
     let mut layer_height = 0
-    let mut rows = 0
     // shelf state for this band
     let mut y = 0
     let mut x = 0
@@ -38,7 +37,6 @@ pub fn palletize(
       let mut attempts = 0
       while attempts < 6 && !placed_here {
         attempts = attempts + 1
-        let mut any_orientation = false
         for o in cargo.upright.allowed() {
           let od = cargo.dims.oriented(o)
           if od.height > envelope.height - z {
@@ -51,7 +49,6 @@ pub fn palletize(
           if y + od.width > envelope.width {
             continue
           }
-          any_orientation = true
           let box = Aabb::at(x, y, z, od)
           if packer.fits(idx, box) {
             packer.commit(idx, Candidate::{
@@ -69,13 +66,11 @@ pub fn palletize(
             break
           }
         }
-        let _ = any_orientation
         if !placed_here {
           // move to the next slot: next row, or next band
           if x == 0 {
             y = y + max_i(row_depth, 1)
             row_depth = 0
-            rows = rows + 1
             if y >= envelope.width {
               break
             }
@@ -89,9 +84,12 @@ pub fn palletize(
       break
     }
     z = z + max_i(layer_height, 1)
-    let _ = rows
   }
-  let placements = slots_to_placements(packer.placed, cargos)
+  let placements = balance_load(
+    unit,
+    slots_to_placements(packer.placed, cargos),
+    cargos,
+  )
   let unplaced : Array[Unplaced] = []
   for i in 0..<cargos.length() {
     if !planned[i] {
