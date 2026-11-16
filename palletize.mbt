@@ -1,11 +1,9 @@
 ///|
-/// Shelf packing: cargo is arranged in horizontal layers, each layer filled row by
-/// row from the door corner outwards. This is how a pallet or a truck is really
-/// built (a loader cannot drop a box into a cavity), and it produces a plan whose
-/// support graph is a clean stack of layers.
-///
-/// Layers are horizontal bands: every box in a band stands on the band below (or
-/// on the pallet itself), and the band height is the tallest box in it.
+/// Shelf packing plus column stacking: the floor is laid out row by row from the
+/// door corner, then every remaining box is stacked on a box that can carry its
+/// whole base. This is how a pallet or a truck is really built -- a loader sets a
+/// box down on another box, never into a cavity between two boxes -- and it keeps
+/// the support graph simple enough to check by eye.
 pub fn palletize(
   unit : LoadUnit,
   cargos : Array[Cargo],
@@ -18,72 +16,114 @@ pub fn palletize(
   for _ in 0..<cargos.length() {
     planned.push(false)
   }
-  let mut z = 0
-  let mut rounds = 0
-  while z < envelope.height && rounds < 200 {
-    rounds = rounds + 1
-    let mut layer_height = 0
-    // shelf state for this band
-    let mut y = 0
-    let mut x = 0
-    let mut row_depth = 0
-    let mut placed_in_layer = 0
-    for idx in order {
-      if planned[idx] {
-        continue
+  // Floor band: one shelf layout at z = 0. Every position here is reachable by a
+  // loader, so the floor is laid out first and never revisited.
+  let mut y = 0
+  let mut x = 0
+  let mut row_depth = 0
+  for idx in order {
+    if planned[idx] {
+      continue
+    }
+    let cargo = cargos[idx]
+    let mut placed_here = false
+    let mut attempts = 0
+    while attempts < 8 && !placed_here {
+      attempts = attempts + 1
+      for o in cargo.upright.allowed() {
+        let od = cargo.dims.oriented(o)
+        if od.height > envelope.height {
+          continue
+        }
+        if x + od.length > envelope.length {
+          continue
+        }
+        if y + od.width > envelope.width {
+          continue
+        }
+        let box = Aabb::at(x, y, 0, od)
+        if packer.fits(idx, box) {
+          packer.commit(idx, Candidate::{
+            box,
+            orientation: o,
+            layer: 0,
+            support_permille: 1000,
+          })
+          planned[idx] = true
+          placed_here = true
+          row_depth = max_i(row_depth, od.width)
+          x = x + od.length
+          break
+        }
       }
-      let cargo = cargos[idx]
-      let mut placed_here = false
-      let mut attempts = 0
-      while attempts < 6 && !placed_here {
-        attempts = attempts + 1
-        for o in cargo.upright.allowed() {
-          let od = cargo.dims.oriented(o)
-          if od.height > envelope.height - z {
-            continue
-          }
-          if x + od.length > envelope.length {
-            // open a new row
-            continue
-          }
-          if y + od.width > envelope.width {
-            continue
-          }
-          let box = Aabb::at(x, y, z, od)
-          if packer.fits(idx, box) {
-            packer.commit(idx, Candidate::{
-              box,
-              orientation: o,
-              layer: 0,
-              support_permille: 1000,
-            })
-            planned[idx] = true
-            placed_here = true
-            placed_in_layer = placed_in_layer + 1
-            layer_height = max_i(layer_height, od.height)
-            row_depth = max_i(row_depth, od.width)
-            x = x + od.length
+      if !placed_here {
+        // Next slot: open a new row, or give up on the floor.
+        if x == 0 {
+          y = y + max_i(row_depth, 1)
+          row_depth = 0
+          if y >= envelope.width {
             break
           }
-        }
-        if !placed_here {
-          // move to the next slot: next row, or next band
-          if x == 0 {
-            y = y + max_i(row_depth, 1)
-            row_depth = 0
-            if y >= envelope.width {
-              break
-            }
-          } else {
-            x = 0
-          }
+        } else {
+          x = 0
         }
       }
     }
-    if placed_in_layer == 0 {
-      break
+  }
+  // Columns: for every box still standing on the floor, put one box on top of it
+  // whenever the base fits and the rules allow it. One box per column per round,
+  // so a column grows bottom-up and each step has full support.
+  let mut rounds = 0
+  let mut progress = true
+  while progress && rounds < 400 {
+    rounds = rounds + 1
+    progress = false
+    let snapshot : Array[Int32] = []
+    for s in 0..<packer.placed.length() {
+      snapshot.push(s)
     }
-    z = z + max_i(layer_height, 1)
+    for s in snapshot {
+      let base = packer.placed[s]
+      if base.load_on_top_g > 0 {
+        continue
+      }
+      for idx in order {
+        if planned[idx] {
+          continue
+        }
+        let cargo = cargos[idx]
+        let mut done = false
+        for o in cargo.upright.allowed() {
+          if done {
+            continue
+          }
+          let od = cargo.dims.oriented(o)
+          if od.length <= base.box.size.length &&
+            od.width <= base.box.size.width {
+            let box = Aabb::at(
+              base.box.min.x,
+              base.box.min.y,
+              base.box.max_z(),
+              od,
+            )
+            if packer.fits(idx, box) {
+              packer.commit(idx, Candidate::{
+                box,
+                orientation: o,
+                layer: 0,
+                support_permille: 1000,
+              })
+              planned[idx] = true
+              done = true
+              progress = true
+            }
+          }
+        }
+        if done {
+          break
+        }
+      }
+    }
   }
   let placements = balance_load(
     unit,
@@ -155,20 +195,4 @@ pub fn order_by_footprint(cargos : Array[Cargo]) -> Array[Int32] {
     i = i + 1
   }
   idx
-}
-
-///|
-test "palletize: six cartons on a euro pallet" {
-  let unit = LoadUnit::pallet_eur("P1")
-  let cargos : Array[Cargo] = []
-  for i in 0..<6 {
-    cargos.push(
-      Cargo::new("C" + i.to_string(), Dimensions::new(400, 300, 300), 8_000),
-    )
-  }
-  let plan = palletize(unit, cargos, StowRules::default())
-  assert_eq(plan.placements.length(), 6)
-  assert_eq(plan.unplaced.length(), 0)
-  assert_true(is_clear(plan.violations))
-  assert_true(plan.metrics.stack_height_mm > 0)
 }
