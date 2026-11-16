@@ -107,8 +107,10 @@ pub fn palletize(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> L
 pub fn order_by_footprint(cargos : Array[Cargo]) -> Array[Int32]
 ```
 
-按层推进：一层先沿 x 排行、行满换 y，层满往上。适合箱规一致的码垛；
-混规或需要贴合凹槽时用 `pack`。两者返回同一个 `LoadPlan` 类型，可以并排比较。
+两段式：地面先按货架排布（沿 x 排行、行满换 y），然后逐列往上摞——每件只允许
+落在能完整托住它底面的那一件上，所以支撑关系始终是一棵干净的柱状树，人工复核时
+一眼能看出谁压着谁。适合箱规一致的码垛；要贴合凹槽、钻空位时用 `pack`。两者返回
+同一个 `LoadPlan` 类型，可以并排比较。
 
 ## 选箱 cartonize.mbt
 
