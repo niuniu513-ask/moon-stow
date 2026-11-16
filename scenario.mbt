@@ -179,6 +179,11 @@ pub fn parse_cargo(j : Json) -> Cargo? {
     Some(kg) => max_i(0, (kg * 1000.0).to_int())
     None => 0
   }
+  // A zero or negative edge is a data entry mistake, not a small carton: reject
+  // it here so a bad order file cannot turn into a degenerate placement.
+  if l <= 0 || w <= 0 || h <= 0 {
+    return None
+  }
   let mut cargo = Cargo::new(id, Dimensions::new(l, w, h), weight_g)
   match obj_get(j, "upright") {
     Some(v) =>
