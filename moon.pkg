@@ -1,0 +1,6 @@
+// Deterministic 3D cargo loading and stowage core: integer geometry,
+// constraint checking, packing heuristics, stability and load-plan reporting.
+
+import {
+  "moonbitlang/core/json",
+}

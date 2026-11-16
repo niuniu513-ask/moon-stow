@@ -1,0 +1,5 @@
+_build/
+.mooncakes/
+*.wasm
+*.c
+.DS_Store
