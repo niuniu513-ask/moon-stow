@@ -9,9 +9,16 @@
 
 ## 快速开始
 
+从源码使用（克隆后把示例放进自己的模块）：
+
 ```bash
-moon add niuniu513-ask/moon-stow
+git clone https://github.com/niuniu513-ask/moon-stow
+cd moon-stow
+moon run examples/quickstart
 ```
+
+在自己的模块里引用：在 `moon.pkg` 的 `import` 中加入 `"niuniu513-ask/moon-stow"`，
+依赖通过 Git 或 Mooncakes 拉取，模块名与 `moon.mod` 一致。
 
 ```moonbit
 fn main {
