@@ -183,11 +183,14 @@ fn Packer::commit(self : Packer, cargo_index : Int32, cand : Candidate) -> Unit 
   for s in supports {
     self.placed[s].load_on_top_g = self.placed[s].load_on_top_g + cargo.weight_g
   }
+  // The layer is derived from what actually carries the box. A caller may only
+  // raise it, never lower it: a packer that passes layer 0 for every box would
+  // otherwise hide a stack that is taller than the goods allow.
   self.placed.push({
     cargo_index,
     box: cand.box,
     orientation: cand.orientation,
-    layer: cand.layer,
+    layer: max_i(self.layer_for(supports), cand.layer),
     load_on_top_g: 0,
   })
   self.used_weight_g = self.used_weight_g + cargo.weight_g
