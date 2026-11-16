@@ -151,6 +151,7 @@ moon run examples/quickstart   # 集装箱装箱 + 文本报告
 moon run examples/pallet       # 托盘码垛 vs 通用装箱对比
 moon run examples/cartonize    # 选箱与成本
 moon run examples/multistop    # 多站点装车 + 送货清单 + JSON + SVG
+moon run examples/hazard       # 危险品隔离：净距放不下时谁被留在箱外
 ```
 
 ## 校验
