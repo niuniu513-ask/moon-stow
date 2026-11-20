@@ -1,11 +1,12 @@
 ///|
 /// A loading job as it arrives from an order system: one unit, the goods, and the
 /// house rules. This is the input format the CLI and the tests share.
+#derive(Eq)
 pub(all) struct Scenario {
   unit : LoadUnit
   cargos : Array[Cargo]
   rules : StowRules
-} derive(Eq)
+}
 
 ///|
 pub extend Scenario with Eq::{equal, not_equal}
@@ -43,8 +44,51 @@ pub fn parse_scenario(text : String) -> Result[Scenario, String] {
     i = i + 1
   }
   let rules = match obj_get(root, "rules") {
-    Some(j) => parse_rules(j)
+    Some(j) => {
+      if !(j is Object(_)) {
+        return Err("rules: must be an object")
+      }
+      for field in ["overstow", "axles"] {
+        match obj_get(j, field) {
+          Some(v) =>
+            if bool_of(v) is None {
+              return Err("rules: invalid boolean " + field)
+            }
+          None => ()
+        }
+      }
+      for
+        field in [
+          "min_support_permille", "cog_margin_permille", "max_stack_layers",
+        ] {
+        match obj_get(j, field) {
+          Some(v) =>
+            match num_of(v) {
+              Some(n) =>
+                if n < 0.0 || n > 1000.0 || n != n.to_int().to_double() {
+                  return Err("rules: invalid threshold " + field)
+                }
+              None => return Err("rules: invalid threshold " + field)
+            }
+          None => ()
+        }
+      }
+      parse_rules(j)
+    }
     None => StowRules::default()
+  }
+  let invalid = validate_input(unit, cargos, rules)
+  if invalid.length() > 0 {
+    return Err("scenario: " + invalid[0].detail)
+  }
+  let ids : Array[String] = []
+  for c in cargos {
+    for id in ids {
+      if c.id == id {
+        return Err("items: duplicate cargo id " + c.id)
+      }
+    }
+    ids.push(c.id)
   }
   Ok({ unit, cargos, rules, })
 }
@@ -160,24 +204,72 @@ pub fn parse_cargo(j : Json) -> Cargo? {
       }
     None => return None
   }
-  if size.length() < 3 {
+  if size.length() != 3 {
     return None
   }
   let l = match num_of(size[0]) {
-    Some(n) => n.to_int()
+    Some(n) =>
+      if n >= 1.0 && n <= 30_000.0 && n == n.to_int().to_double() {
+        n.to_int()
+      } else {
+        return None
+      }
     None => return None
   }
   let w = match num_of(size[1]) {
-    Some(n) => n.to_int()
+    Some(n) =>
+      if n >= 1.0 && n <= 30_000.0 && n == n.to_int().to_double() {
+        n.to_int()
+      } else {
+        return None
+      }
     None => return None
   }
   let h = match num_of(size[2]) {
-    Some(n) => n.to_int()
+    Some(n) =>
+      if n >= 1.0 && n <= 30_000.0 && n == n.to_int().to_double() {
+        n.to_int()
+      } else {
+        return None
+      }
     None => return None
   }
-  let weight_g = match number_or(j, "weight_kg") {
-    Some(kg) => max_i(0, (kg * 1000.0).to_int())
+  let weight_g = match obj_get(j, "weight_kg") {
+    Some(v) =>
+      match num_of(v) {
+        Some(kg) =>
+          if kg >= 0.0 && kg <= 2_000_000.0 {
+            (kg * 1000.0).to_int()
+          } else {
+            return None
+          }
+        None => return None
+      }
     None => 0
+  }
+  if id.trim().length() == 0 {
+    return None
+  }
+  for field in ["stop", "priority", "gap_mm", "max_layers", "top_load_kg"] {
+    match obj_get(j, field) {
+      Some(v) =>
+        match num_of(v) {
+          Some(n) =>
+            if n < 0.0 ||
+              n > 2_000_000.0 ||
+              (field != "top_load_kg" && n != n.to_int().to_double()) {
+              return None
+            }
+          None => return None
+        }
+      None => ()
+    }
+  }
+  for field in ["fragile", "stackable"] {
+    match obj_get(j, field) {
+      Some(v) => if bool_of(v) is None { return None }
+      None => ()
+    }
   }
   // A zero or negative edge is a data entry mistake, not a small carton: reject
   // it here so a bad order file cannot turn into a degenerate placement.
@@ -188,8 +280,17 @@ pub fn parse_cargo(j : Json) -> Cargo? {
   match obj_get(j, "upright") {
     Some(v) =>
       match str_of(v) {
-        Some(s) => cargo = cargo.with_upright(upright_of(s))
-        None => ()
+        Some(s) =>
+          if s == "fixed" ||
+            s == "this_side_up" ||
+            s == "free" ||
+            s == "any" ||
+            s == "keep_upright" {
+            cargo = cargo.with_upright(upright_of(s))
+          } else {
+            return None
+          }
+        None => return None
       }
     None => ()
   }
@@ -235,30 +336,50 @@ pub fn parse_cargo(j : Json) -> Cargo? {
       let hc = match obj_get(v, "class") {
         Some(c) =>
           match str_of(c) {
-            Some(s) => HazardClass::parse(s)
+            Some(s) =>
+              match HazardClass::parse(s) {
+                Some(h) => h
+                None => return None
+              }
             None => None
           }
         None => None
       }
-      if hc.is_regulated() {
-        let un = match obj_get(v, "un") {
-          Some(u) =>
-            match str_of(u) {
-              Some(s) => s
-              None => ""
-            }
-          None => ""
-        }
-        let group = match obj_get(v, "group") {
-          Some(g) =>
-            match str_of(g) {
-              Some(s) => packing_group_of(s)
-              None => NotApplicable
-            }
-          None => NotApplicable
-        }
-        cargo = cargo.with_hazard(Hazard::new(hc, un, group))
+      if !hc.is_regulated() {
+        return None
       }
+      let un = match obj_get(v, "un") {
+        Some(u) =>
+          match str_of(u) {
+            Some(s) => s
+            None => return None
+          }
+        None => return None
+      }
+      let group = match obj_get(v, "group") {
+        Some(g) =>
+          match str_of(g) {
+            Some("I") => I
+            Some("II") => II
+            Some("III") => III
+            Some("N/A") => NotApplicable
+            _ => return None
+          }
+        None => NotApplicable
+      }
+      let declaration = match obj_get(v, "declaration_ref") {
+        Some(d) =>
+          match str_of(d) {
+            Some(s) => s
+            None => return None
+          }
+        None => ""
+      }
+      let hazard = Hazard::new(hc, un, group).with_declaration(declaration)
+      if !hazard.is_valid() {
+        return None
+      }
+      cargo = cargo.with_hazard(hazard)
     }
     None => ()
   }
@@ -370,6 +491,12 @@ pub fn plan_to_json(plan : LoadPlan) -> String {
     json_str("unit_id") +
     ": " +
     json_str(plan.unit_id) +
+    ",\n"
+  out = out +
+    "  " +
+    json_str("planning_scope") +
+    ": " +
+    json_str(planning_scope(plan)) +
     ",\n"
   out = out +
     "  " +

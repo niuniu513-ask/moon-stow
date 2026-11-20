@@ -2,12 +2,13 @@
 /// What the cargo is loaded into. The geometry and the limit set are the same
 /// for every kind, which is why one packer serves containers, trucks, pallets
 /// and air ULDs.
+#derive(Eq)
 pub(all) enum UnitKind {
   Container
   Truck
   Pallet
   AirUld
-} derive(Eq)
+}
 
 ///|
 pub fn UnitKind::label(self : UnitKind) -> String {
@@ -22,17 +23,25 @@ pub fn UnitKind::label(self : UnitKind) -> String {
 ///|
 /// One axle of a road vehicle: distance from the load unit's rear face and the
 /// maximum legal load on that axle.
+#derive(Eq)
 pub(all) struct Axle {
   position_mm : Int32
   max_load_g : Int32
-} derive(Eq)
-
-///|
-pub fn Axle::new(position_mm : Int32, max_load_g : Int32) -> Axle {
-  { position_mm, max_load_g, }
+  empty_load_g : Int32
 }
 
 ///|
+pub fn Axle::new(position_mm : Int32, max_load_g : Int32) -> Axle {
+  { position_mm, max_load_g, empty_load_g: 0, }
+}
+
+///|
+pub fn Axle::with_empty_load(self : Axle, grams : Int32) -> Axle {
+  { ..self, empty_load_g: grams, }
+}
+
+///|
+#derive(Eq)
 pub(all) struct LoadUnit {
   id : String
   kind : UnitKind
@@ -43,7 +52,7 @@ pub(all) struct LoadUnit {
   axles : Array[Axle]
   rear_door_at_origin : Bool
   max_stack_height_mm : Int32
-} derive(Eq)
+}
 
 ///|
 /// A 20 foot dry container: 5898 x 2352 x 2393 inside, 28 200 kg payload.
@@ -88,7 +97,10 @@ pub fn LoadUnit::truck_rigid(id : String) -> LoadUnit {
     max_payload_g: 24_000_000,
     tare_g: 12_000_000,
     floor_limit_g_per_m2: 1_200_000,
-    axles: [Axle::new(1_400, 10_000_000), Axle::new(11_000, 11_500_000)],
+    axles: [
+      Axle::new(1_400, 10_000_000).with_empty_load(4_000_000),
+      Axle::new(11_000, 11_500_000).with_empty_load(8_000_000),
+    ],
     rear_door_at_origin: true,
     max_stack_height_mm: 2700,
   }
@@ -155,8 +167,14 @@ pub fn LoadUnit::with_axles(self : LoadUnit, axles : Array[Axle]) -> LoadUnit {
 }
 
 ///|
-/// Capacity in cubic metres, computed in Int64 so 45 foot boxes stay exact.
+/// Legacy name: returns capacity in integer cubic MILLIMETRES, not m3.
+/// Prefer `capacity_mm3` for explicit units.
 pub fn LoadUnit::capacity_m3(self : LoadUnit) -> Int64 {
+  self.envelope().volume_mm3()
+}
+
+///|
+pub fn LoadUnit::capacity_mm3(self : LoadUnit) -> Int64 {
   self.envelope().volume_mm3()
 }
 

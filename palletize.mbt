@@ -9,6 +9,10 @@ pub fn palletize(
   cargos : Array[Cargo],
   rules : StowRules,
 ) -> LoadPlan {
+  match blocked_plan(unit, cargos, rules) {
+    Some(blocked) => return blocked
+    None => ()
+  }
   let packer = Packer::new(unit, cargos, rules)
   let envelope = packer.envelope
   let order = order_by_footprint(cargos)

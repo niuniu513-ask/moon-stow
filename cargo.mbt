@@ -2,11 +2,12 @@
 /// How much a cargo may be rotated. `Fixed` keeps the declared orientation,
 /// `KeepUpright` allows the 90 degree turn on the floor, `Free` allows all six
 /// axis aligned orientations.
+#derive(Eq)
 pub(all) enum UprightPolicy {
   Fixed
   KeepUpright
   Free
-} derive(Eq)
+}
 
 ///|
 pub fn UprightPolicy::allowed(self : UprightPolicy) -> Array[Orientation] {
@@ -20,6 +21,7 @@ pub fn UprightPolicy::allowed(self : UprightPolicy) -> Array[Orientation] {
 ///|
 /// One piece of freight. Everything the packer and the verifier need is on this
 /// record: geometry, mass, stacking limits, hazard class, delivery stop.
+#derive(Eq)
 pub(all) struct Cargo {
   id : String
   dims : Dimensions
@@ -34,7 +36,7 @@ pub(all) struct Cargo {
   group : String
   priority : Int32
   min_gap_mm : Int32
-} derive(Eq)
+}
 
 ///|
 /// A plain carton: 600 x 400 x 400, 12 kg, upright, stackable in three layers.

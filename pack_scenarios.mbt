@@ -70,7 +70,7 @@ test "pack: nothing is stacked on a fragile item" {
 }
 
 ///|
-test "pack: incompatible hazard classes keep their distance" {
+test "pack: unreviewed dangerous goods block the entire manifest" {
   let unit = LoadUnit::container_20ft("C")
   let cargos = [
     Cargo::new("EXPL", Dimensions::new(800, 600, 600), 10_000).with_hazard(
@@ -81,9 +81,9 @@ test "pack: incompatible hazard classes keep their distance" {
     ),
   ]
   let plan = pack(unit, cargos, StowRules::default())
-  // the segregation distance is 3 m, wider than the container, so only one goes in
-  assert_eq(plan.placements.length(), 1)
-  assert_eq(plan.unplaced.length(), 1)
+  assert_eq(plan.placements.length(), 0)
+  assert_eq(plan.unplaced.length(), 2)
+  assert_false(is_clear(plan.violations))
 }
 
 ///|

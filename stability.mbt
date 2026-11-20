@@ -9,8 +9,8 @@ pub fn axle_loads(
   cargos : Array[Cargo],
 ) -> Array[Int32] {
   let loads : Array[Int32] = []
-  for _ in unit.axles {
-    loads.push(0)
+  for axle in unit.axles {
+    loads.push(axle.empty_load_g)
   }
   if unit.axles.length() == 0 {
     return loads
@@ -28,7 +28,9 @@ pub fn axle_loads(
       let b = unit.axles[i + 1]
       if x >= a.position_mm && x <= b.position_mm {
         let span = max_i(1, b.position_mm - a.position_mm)
-        let to_b = weight * (x - a.position_mm) / span
+        let to_b = (weight.to_int64() *
+        (x - a.position_mm).to_int64() /
+        span.to_int64()).to_int()
         loads[i] = loads[i] + (weight - to_b)
         loads[i + 1] = loads[i + 1] + to_b
         placed = true
@@ -56,7 +58,8 @@ pub fn max_floor_pressure(
   cargos : Array[Cargo],
 ) -> Int32 {
   let mut worst = 0
-  for p in placements {
+  for index in 0..<placements.length() {
+    let p = placements[index]
     if p.box.min.z != 0 || p.cargo_index < 0 || p.cargo_index >= cargos.length() {
       continue
     }
@@ -64,9 +67,10 @@ pub fn max_floor_pressure(
     if area_m2 <= 0L {
       continue
     }
-    let weight = cargos[p.cargo_index].weight_g.to_int64()
+    let weight = cargos[p.cargo_index].weight_g.to_int64() +
+      load_on(placements, cargos, index).to_int64()
     let pressure = weight * 1_000_000L / area_m2
-    worst = max_i(worst, pressure.to_int())
+    worst = max_i(worst, min64(pressure, 2_147_483_647L).to_int())
   }
   worst
 }
@@ -273,6 +277,6 @@ test "stability: lever rule splits weight" {
   ]
   let loads = axle_loads(unit, placements, cargos)
   assert_eq(loads.length(), 2)
-  assert_eq(loads[0] + loads[1], 10_000)
-  assert_true(loads[0] >= 4_000 && loads[0] <= 6_000)
+  assert_eq(loads[0] + loads[1], 12_010_000)
+  assert_true(loads[0] >= 4_004_000 && loads[0] <= 4_006_000)
 }

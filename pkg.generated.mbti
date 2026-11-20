@@ -1,12 +1,18 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "niuniu513-ask/moon-stow"
 
+import {
+  "moonbitlang/core/json",
+}
+
 // Values
 pub const G_PER_KG : Int32 = 1000
 
 pub const MM2_PER_M2 : Int32 = 1_000_000
 
 pub const MM_PER_M : Int32 = 1000
+
+pub fn assess_hazards(LoadUnit, Array[Cargo], StowRules) -> Array[Violation]
 
 pub fn axle_loads(LoadUnit, Array[Placement], Array[Cargo]) -> Array[Int32]
 
@@ -21,8 +27,6 @@ pub fn center_of_gravity(Array[Placement], Array[Cargo]) -> Point3?
 pub fn chargeable_weight_g(CartonSpec, Int32) -> Int32
 
 pub fn clamp_int(Int32, Int32, Int32) -> Int32
-
-pub fn clearance_for_level(Int32) -> Int32
 
 pub fn cog_inside_floor(Point3, Dimensions) -> Bool
 
@@ -90,17 +94,19 @@ pub fn pad_start(String, Int32, String) -> String
 
 pub fn palletize(LoadUnit, Array[Cargo], StowRules) -> LoadPlan
 
-pub fn parse_cargo(Json) -> Cargo?
+pub fn parse_cargo(@json.Json) -> Cargo?
 
-pub fn parse_rules(Json) -> StowRules
+pub fn parse_rules(@json.Json) -> StowRules
 
 pub fn parse_scenario(String) -> Result[Scenario, String]
 
-pub fn parse_unit(Json) -> LoadUnit?
+pub fn parse_unit(@json.Json) -> LoadUnit?
 
 pub fn plan_to_json(LoadPlan) -> String
 
 pub fn plan_to_string(LoadPlan) -> String
+
+pub fn planning_scope(LoadPlan) -> String
 
 pub fn ratio_permille(Int64, Int64) -> Int32
 
@@ -122,10 +128,6 @@ pub fn replace_all(String, String, String) -> String
 
 pub fn scale_permille(Int32, Int32) -> Int32
 
-pub fn segregation_label(Int32) -> String
-
-pub fn segregation_level(HazardClass, HazardClass) -> Int32
-
 pub fn sort_ints(Array[Int32]) -> Unit
 
 pub fn sort_placements(Array[Placement]) -> Array[Placement]
@@ -138,6 +140,8 @@ pub fn supports_of(Array[Placement], Int32) -> Array[Int32]
 
 pub fn upright_of(String) -> UprightPolicy
 
+pub fn validate_input(LoadUnit, Array[Cargo], StowRules) -> Array[Violation]
+
 pub fn verify(LoadUnit, Array[Cargo], Array[Placement], StowRules) -> Array[Violation]
 
 pub fn volume_mm3(Dimensions) -> Int64
@@ -149,10 +153,11 @@ pub fn xml_escape(String) -> String
 // Errors
 
 // Types and methods
+#derive(Eq)
 pub(all) struct Aabb {
   min : Point3
   size : Dimensions
-} derive(Eq)
+}
 pub fn Aabb::at(Int32, Int32, Int32, Dimensions) -> Self
 pub fn Aabb::center_x(Self) -> Int32
 pub fn Aabb::center_y(Self) -> Int32
@@ -168,17 +173,23 @@ pub fn Aabb::max_z(Self) -> Int32
 pub fn Aabb::new(Point3, Dimensions) -> Self
 pub fn Aabb::not_equal(Self, Self) -> Bool
 pub fn Aabb::overlap_volume(Self, Self) -> Int64
+pub fn Aabb::shares_height(Self, Self) -> Bool
+pub fn Aabb::side_gap(Self, Self) -> Int32
 pub fn Aabb::supported_area(Self, Array[Self]) -> Int32
 pub fn Aabb::volume_mm3(Self) -> Int64
 
+#derive(Eq)
 pub(all) struct Axle {
   position_mm : Int32
   max_load_g : Int32
-} derive(Eq)
+  empty_load_g : Int32
+}
 pub fn Axle::equal(Self, Self) -> Bool
 pub fn Axle::new(Int32, Int32) -> Self
 pub fn Axle::not_equal(Self, Self) -> Bool
+pub fn Axle::with_empty_load(Self, Int32) -> Self
 
+#derive(Eq)
 pub(all) struct Cargo {
   id : String
   dims : Dimensions
@@ -193,7 +204,7 @@ pub(all) struct Cargo {
   group : String
   priority : Int32
   min_gap_mm : Int32
-} derive(Eq)
+}
 pub fn Cargo::accepts_load_on_top(Self, Int32) -> Bool
 pub fn Cargo::equal(Self, Self) -> Bool
 pub fn Cargo::fragile_item(Self) -> Self
@@ -209,24 +220,27 @@ pub fn Cargo::with_stack_limit(Self, Int32, Int32) -> Self
 pub fn Cargo::with_stop(Self, Int32) -> Self
 pub fn Cargo::with_upright(Self, UprightPolicy) -> Self
 
+#derive(Eq)
 pub(all) struct CartonPick {
   carton : CartonSpec
   plan : LoadPlan
-} derive(Eq)
+}
 pub fn CartonPick::equal(Self, Self) -> Bool
 pub fn CartonPick::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct CartonSpec {
   id : String
   inner : Dimensions
   max_weight_g : Int32
   cost_cents : Int32
-} derive(Eq)
+}
 pub fn CartonSpec::as_unit(Self) -> LoadUnit
 pub fn CartonSpec::equal(Self, Self) -> Bool
 pub fn CartonSpec::new(String, Dimensions, Int32, Int32) -> Self
 pub fn CartonSpec::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Cartonization {
   picks : Array[CartonPick]
   unpacked : Array[Unplaced]
@@ -234,15 +248,16 @@ pub(all) struct Cartonization {
   total_inner_volume_mm3 : Int64
   goods_volume_mm3 : Int64
   void_fill_permille : Int32
-} derive(Eq)
+}
 pub fn Cartonization::equal(Self, Self) -> Bool
 pub fn Cartonization::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Dimensions {
   length : Int32
   width : Int32
   height : Int32
-} derive(Eq)
+}
 pub fn Dimensions::equal(Self, Self) -> Bool
 pub fn Dimensions::is_positive(Self) -> Bool
 pub fn Dimensions::new(Int32, Int32, Int32) -> Self
@@ -250,16 +265,21 @@ pub fn Dimensions::not_equal(Self, Self) -> Bool
 pub fn Dimensions::oriented(Self, Orientation) -> Self
 pub fn Dimensions::volume_mm3(Self) -> Int64
 
+#derive(Eq)
 pub(all) struct Hazard {
   class : HazardClass
   un_number : String
   packing_group : PackingGroup
-} derive(Eq)
+  declaration_ref : String
+}
 pub fn Hazard::equal(Self, Self) -> Bool
+pub fn Hazard::is_valid(Self) -> Bool
 pub fn Hazard::new(HazardClass, String, PackingGroup) -> Self
 pub fn Hazard::none() -> Self
 pub fn Hazard::not_equal(Self, Self) -> Bool
+pub fn Hazard::with_declaration(Self, String) -> Self
 
+#derive(Eq)
 pub(all) enum HazardClass {
   None
   Explosive
@@ -277,14 +297,47 @@ pub(all) enum HazardClass {
   Radioactive
   Corrosive
   Miscellaneous
-} derive(Eq)
+}
 pub fn HazardClass::code(Self) -> String
 pub fn HazardClass::equal(Self, Self) -> Bool
 pub fn HazardClass::index(Self) -> Int32
 pub fn HazardClass::is_regulated(Self) -> Bool
 pub fn HazardClass::not_equal(Self, Self) -> Bool
-pub fn HazardClass::parse(String) -> Self
+pub fn HazardClass::parse(String) -> Self?
 
+#derive(Eq)
+pub(all) struct HazardPairRule {
+  a : Hazard
+  b : Hazard
+  relation : HazardRelation
+  rule_id : String
+  source : String
+}
+pub fn HazardPairRule::equal(Self, Self) -> Bool
+pub fn HazardPairRule::not_equal(Self, Self) -> Bool
+
+#derive(Eq)
+pub(all) enum HazardRelation {
+  ProhibitSameUnit
+  ReviewRequired
+}
+pub fn HazardRelation::equal(Self, Self) -> Bool
+pub fn HazardRelation::not_equal(Self, Self) -> Bool
+
+#derive(Eq)
+pub struct HazardReview {
+  unit : LoadUnit
+  cargos : Array[Cargo]
+  pairs : Array[HazardPairRule]
+  record_id : String
+  reviewer : String
+  evidence : String
+}
+pub fn HazardReview::equal(Self, Self) -> Bool
+pub fn HazardReview::new(LoadUnit, Array[Cargo], Array[HazardPairRule], String, String, String) -> Self
+pub fn HazardReview::not_equal(Self, Self) -> Bool
+
+#derive(Eq)
 pub(all) struct LoadPlan {
   unit_id : String
   unit_kind : UnitKind
@@ -292,10 +345,11 @@ pub(all) struct LoadPlan {
   unplaced : Array[Unplaced]
   metrics : PlanMetrics
   violations : Array[Violation]
-} derive(Eq)
+}
 pub fn LoadPlan::equal(Self, Self) -> Bool
 pub fn LoadPlan::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct LoadUnit {
   id : String
   kind : UnitKind
@@ -306,8 +360,9 @@ pub(all) struct LoadUnit {
   axles : Array[Axle]
   rear_door_at_origin : Bool
   max_stack_height_mm : Int32
-} derive(Eq)
+}
 pub fn LoadUnit::capacity_m3(Self) -> Int64
+pub fn LoadUnit::capacity_mm3(Self) -> Int64
 pub fn LoadUnit::container_20ft(String) -> Self
 pub fn LoadUnit::container_40hc(String) -> Self
 pub fn LoadUnit::envelope(Self) -> Dimensions
@@ -320,6 +375,7 @@ pub fn LoadUnit::truck_rigid(String) -> Self
 pub fn LoadUnit::with_axles(Self, Array[Axle]) -> Self
 pub fn LoadUnit::with_payload(Self, Int32) -> Self
 
+#derive(Eq)
 pub(all) enum Orientation {
   LWH
   WLH
@@ -327,7 +383,7 @@ pub(all) enum Orientation {
   HLW
   WHL
   HWL
-} derive(Eq)
+}
 pub fn Orientation::all() -> Array[Self]
 pub fn Orientation::equal(Self, Self) -> Bool
 pub fn Orientation::keeps_upright(Self) -> Bool
@@ -344,15 +400,17 @@ pub struct Packer {
 }
 pub fn Packer::new(LoadUnit, Array[Cargo], StowRules) -> Self
 
+#derive(Eq)
 pub(all) enum PackingGroup {
   NotApplicable
   I
   II
   III
-} derive(Eq)
+}
 pub fn PackingGroup::equal(Self, Self) -> Bool
 pub fn PackingGroup::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Placement {
   cargo_id : String
   cargo_index : Int32
@@ -360,12 +418,13 @@ pub(all) struct Placement {
   box : Aabb
   stop : Int32
   layer : Int32
-} derive(Eq)
+}
 pub fn Placement::equal(Self, Self) -> Bool
 pub fn Placement::footprint_mm2(Self) -> Int64
 pub fn Placement::not_equal(Self, Self) -> Bool
 pub fn Placement::top_z(Self) -> Int32
 
+#derive(Eq)
 pub(all) struct PlanMetrics {
   placed_count : Int32
   cargo_count : Int32
@@ -382,48 +441,51 @@ pub(all) struct PlanMetrics {
   cog_z_mm : Int32
   stack_height_mm : Int32
   stop_weight_g : Array[(Int32, Int32)]
-} derive(Eq)
+}
 pub fn PlanMetrics::equal(Self, Self) -> Bool
 pub fn PlanMetrics::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Point3 {
   x : Int32
   y : Int32
   z : Int32
-} derive(Eq)
+}
 pub fn Point3::equal(Self, Self) -> Bool
 pub fn Point3::new(Int32, Int32, Int32) -> Self
 pub fn Point3::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Scenario {
   unit : LoadUnit
   cargos : Array[Cargo]
   rules : StowRules
-} derive(Eq)
+}
 pub fn Scenario::equal(Self, Self) -> Bool
 pub fn Scenario::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) enum Severity {
   Error
   Warning
   Info
-} derive(Eq)
+}
 pub fn Severity::equal(Self, Self) -> Bool
 pub fn Severity::label(Self) -> String
 pub fn Severity::not_equal(Self, Self) -> Bool
 
 type Slot
 
+#derive(Eq)
 pub(all) struct StowRules {
   min_support_permille : Int32
   cog_margin_permille : Int32
   max_stack_layers : Int32
-  hazard_clearances : Array[Int32]
+  hazard_pairs : Array[HazardPairRule]
+  hazard_review : HazardReview?
   enforce_overstow : Bool
   enforce_axles : Bool
-} derive(Eq)
-pub fn StowRules::allow_max_separation(Self) -> Self
-pub fn StowRules::clearance(Self, Int32) -> Int32
+}
 pub fn StowRules::default() -> Self
 pub fn StowRules::equal(Self, Self) -> Bool
 pub fn StowRules::not_equal(Self, Self) -> Bool
@@ -431,44 +493,52 @@ pub fn StowRules::with_cog_margin(Self, Int32) -> Self
 pub fn StowRules::with_layer_cap(Self, Int32) -> Self
 pub fn StowRules::with_support(Self, Int32) -> Self
 
+#derive(Eq)
 pub(all) enum UnitKind {
   Container
   Truck
   Pallet
   AirUld
-} derive(Eq)
+}
 pub fn UnitKind::equal(Self, Self) -> Bool
 pub fn UnitKind::label(Self) -> String
 pub fn UnitKind::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Unplaced {
   cargo_id : String
   reason : String
-} derive(Eq)
+}
 pub fn Unplaced::equal(Self, Self) -> Bool
 pub fn Unplaced::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) enum UprightPolicy {
   Fixed
   KeepUpright
   Free
-} derive(Eq)
+}
 pub fn UprightPolicy::allowed(Self) -> Array[Orientation]
 pub fn UprightPolicy::equal(Self, Self) -> Bool
 pub fn UprightPolicy::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) struct Violation {
   kind : ViolationKind
   severity : Severity
   cargo_id : String
   other_id : String
   detail : String
-} derive(Eq)
+}
 pub fn Violation::equal(Self, Self) -> Bool
 pub fn Violation::new(ViolationKind, Severity, String, String, String) -> Self
 pub fn Violation::not_equal(Self, Self) -> Bool
 
+#derive(Eq)
 pub(all) enum ViolationKind {
+  InputInvalid
+  CargoGap
+  PlacementMetadata
   OutOfBounds
   Overlap
   InsufficientSupport
@@ -478,14 +548,18 @@ pub(all) enum ViolationKind {
   FloorLimitExceeded
   AxleOverload
   Imbalance
-  HazardClearance
+  HazardInputInvalid
+  HazardRuleUnknown
+  HazardSameUnitForbidden
+  HazardReviewRequired
+  HazardPlanningOnly
   Overstow
   OrientationNotAllowed
   HeightExceeded
   UnknownCargo
   DuplicateCargo
   MissingCargo
-} derive(Eq)
+}
 pub fn ViolationKind::equal(Self, Self) -> Bool
 pub fn ViolationKind::label(Self) -> String
 pub fn ViolationKind::not_equal(Self, Self) -> Bool

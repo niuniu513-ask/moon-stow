@@ -1,6 +1,7 @@
 ///|
 /// Dangerous-goods classes, numbered as in the UN Model Regulations / IMDG code.
-/// `None` means the cargo is not regulated and never constrains a neighbour.
+/// `None` is an explicit non-dangerous declaration, not evidence of compatibility.
+#derive(Eq)
 pub(all) enum HazardClass {
   None
   Explosive
@@ -18,7 +19,7 @@ pub(all) enum HazardClass {
   Radioactive
   Corrosive
   Miscellaneous
-} derive(Eq)
+}
 
 ///|
 pub fn HazardClass::index(self : HazardClass) -> Int32 {
@@ -74,48 +75,56 @@ pub fn HazardClass::is_regulated(self : HazardClass) -> Bool {
 }
 
 ///|
-pub fn HazardClass::parse(text : String) -> HazardClass {
+pub fn HazardClass::parse(text : String) -> HazardClass? {
   match text.trim() {
-    "1" => Explosive
-    "2.1" => GasFlammable
-    "2.2" => GasNonFlammable
-    "2.3" => GasToxic
-    "3" => FlammableLiquid
-    "4.1" => FlammableSolid
-    "4.2" => SpontaneouslyCombustible
-    "4.3" => DangerousWhenWet
-    "5.1" => Oxidizer
-    "5.2" => OrganicPeroxide
-    "6.1" => Toxic
-    "6.2" => Infectious
-    "7" => Radioactive
-    "8" => Corrosive
-    "9" => Miscellaneous
+    "1" => Some(Explosive)
+    "2.1" => Some(GasFlammable)
+    "2.2" => Some(GasNonFlammable)
+    "2.3" => Some(GasToxic)
+    "3" => Some(FlammableLiquid)
+    "4.1" => Some(FlammableSolid)
+    "4.2" => Some(SpontaneouslyCombustible)
+    "4.3" => Some(DangerousWhenWet)
+    "5.1" => Some(Oxidizer)
+    "5.2" => Some(OrganicPeroxide)
+    "6.1" => Some(Toxic)
+    "6.2" => Some(Infectious)
+    "7" => Some(Radioactive)
+    "8" => Some(Corrosive)
+    "9" => Some(Miscellaneous)
     _ => None
   }
 }
 
 ///|
 /// Packing group as used for liquids: I is the most dangerous.
+#derive(Eq)
 pub(all) enum PackingGroup {
   NotApplicable
   I
   II
   III
-} derive(Eq)
+}
 
 ///|
 /// A declared dangerous good. `None` is the default for ordinary freight, so a
 /// plan that never mentions hazards still carries a well defined value.
+#derive(Eq)
 pub(all) struct Hazard {
   class : HazardClass
   un_number : String
   packing_group : PackingGroup
-} derive(Eq)
+  declaration_ref : String
+}
 
 ///|
 pub fn Hazard::none() -> Hazard {
-  { class: None, un_number: "", packing_group: NotApplicable, }
+  {
+    class: None,
+    un_number: "",
+    packing_group: NotApplicable,
+    declaration_ref: "",
+  }
 }
 
 ///|
@@ -124,144 +133,296 @@ pub fn Hazard::new(
   un_number : String,
   group : PackingGroup,
 ) -> Hazard {
-  { class, un_number, packing_group: group, }
+  { class, un_number, packing_group: group, declaration_ref: "", }
 }
 
 ///|
-/// Segregation requirement expressed as one of five levels. The numeric ladder
-/// keeps the table readable and lets a customer replace it with their own.
-pub fn segregation_level(a : HazardClass, b : HazardClass) -> Int32 {
-  let i = a.index()
-  let j = b.index()
-  if i == 0 || j == 0 {
-    return 0
+/// Reference to the exact SDS/declaration revision, including composition,
+/// concentration, subsidiary hazards, packaging and quantity. Contents are
+/// reviewed outside this library; a nonempty reference is not authentication.
+pub fn Hazard::with_declaration(self : Hazard, reference : String) -> Hazard {
+  { ..self, declaration_ref: reference, }
+}
+
+///|
+/// Lexical validation only. It does not identify the substance from its UN code.
+pub fn Hazard::is_valid(self : Hazard) -> Bool {
+  if !self.class.is_regulated() {
+    return self.un_number == "" &&
+      self.packing_group == NotApplicable &&
+      self.declaration_ref == ""
   }
-  max_i(segregation_row(i)[j], segregation_row(j)[i])
-}
-
-///|
-/// One row of the 16x16 segregation matrix; values are 0..4. Row `i` is filled
-/// with the requirement for class `i` against every class `j`.
-///
-/// The defaults follow the shape of IMDG 7.2.4 (away from / separated from /
-/// separated by a complete compartment) reduced to a single clearance per pair.
-/// They are deliberately conservative for explosives and oxidizers, which are
-/// the two pairs where a wrong answer is expensive.
-fn segregation_row(i : Int32) -> Array[Int32] {
-  match i {
-    1 =>
-      // Explosives: keep a complete compartment away from every other class.
-      [0, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
-    2 =>
-      // Flammable gas.
-      [0, 4, 0, 1, 1, 1, 2, 2, 2, 2, 2, 1, 2, 2, 1, 1]
-    3 =>
-      // Non-flammable, non-toxic gas.
-      [0, 4, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
-    4 =>
-      // Toxic gas.
-      [0, 4, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-    5 =>
-      // Flammable liquid.
-      [0, 4, 1, 1, 1, 0, 1, 1, 1, 2, 2, 1, 1, 1, 1, 0]
-    6 =>
-      // Flammable solid.
-      [0, 4, 2, 1, 1, 1, 0, 2, 2, 2, 2, 1, 1, 1, 1, 0]
-    7 =>
-      // Spontaneously combustible.
-      [0, 4, 2, 1, 1, 1, 2, 0, 2, 2, 2, 1, 1, 1, 1, 1]
-    8 =>
-      // Dangerous when wet.
-      [0, 4, 2, 1, 1, 1, 2, 2, 0, 2, 2, 1, 1, 1, 1, 1]
-    9 =>
-      // Oxidizer.
-      [0, 4, 2, 1, 1, 2, 2, 2, 2, 0, 2, 1, 1, 1, 2, 1]
-    10 =>
-      // Organic peroxide.
-      [0, 4, 2, 1, 1, 2, 2, 2, 2, 2, 0, 1, 1, 1, 2, 1]
-    11 =>
-      // Toxic (oral, dermal, inhalation).
-      [0, 4, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0]
-    12 =>
-      // Infectious substance.
-      [0, 4, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1]
-    13 =>
-      // Radioactive.
-      [0, 4, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1]
-    14 =>
-      // Corrosive.
-      [0, 4, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 0, 1]
-    15 =>
-      // Miscellaneous.
-      [0, 4, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0]
-    _ => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  let text = self.un_number
+  let start = if text.length() == 6 && text[0:2].to_owned() == "UN" {
+    2
+  } else {
+    0
   }
-}
-
-///|
-/// Minimum clearance in millimetres implied by a segregation level. The mapping
-/// is the one used by the bundled rule set; a company can pass its own table of
-/// clearances to `StowRules` instead.
-pub fn clearance_for_level(level : Int32) -> Int32 {
-  match level {
-    0 => 0
-    1 => 3_000
-    2 => 6_000
-    3 => 12_000
-    4 => 24_000
-    _ => 24_000
+  if text.length() - start != 4 {
+    return false
   }
-}
-
-///|
-/// Name of a level, used in reports.
-pub fn segregation_label(level : Int32) -> String {
-  match level {
-    0 => "none"
-    1 => "away from"
-    2 => "separated from"
-    3 => "separated by one compartment"
-    4 => "separated longitudinally by a complete compartment"
-    _ => "unspecified"
-  }
-}
-
-///|
-test "hazard: identical non regulated cargo never separates" {
-  assert_eq(segregation_level(None, Corrosive), 0)
-  assert_eq(segregation_level(FlammableLiquid, None), 0)
-}
-
-///|
-test "hazard: table is symmetric" {
-  let classes = [
-    Explosive,
-    GasFlammable,
-    GasNonFlammable,
-    GasToxic,
-    FlammableLiquid,
-    FlammableSolid,
-    SpontaneouslyCombustible,
-    DangerousWhenWet,
-    Oxidizer,
-    OrganicPeroxide,
-    Toxic,
-    Infectious,
-    Radioactive,
-    Corrosive,
-    Miscellaneous,
-  ]
-  for a in classes {
-    for b in classes {
-      assert_eq(segregation_level(a, b), segregation_level(b, a))
+  for i in start..<text.length() {
+    let ch = text[i:i + 1].to_owned()
+    if ch < "0" || ch > "9" {
+      return false
     }
   }
+  text[start:text.length()].to_owned() != "0000"
 }
 
 ///|
-test "hazard: oxidizer and flammable solid must be separated" {
-  assert_eq(segregation_level(Oxidizer, FlammableSolid), 2)
-  assert_eq(clearance_for_level(2), 6_000)
+/// An operator-supplied relationship for exact declarations, never an IMDG table.
+#derive(Eq)
+pub(all) enum HazardRelation {
+  ProhibitSameUnit
+  ReviewRequired
+}
+
+///|
+#derive(Eq)
+pub(all) struct HazardPairRule {
+  a : Hazard
+  b : Hazard
+  relation : HazardRelation
+  rule_id : String
+  source : String
+}
+
+///|
+/// Evidence for a whole manifest and load unit. The constructor copies mutable
+/// arrays so subsequent caller edits invalidate, rather than rewrite, the review.
+/// This is a planning record, not a digital signature or transport permission.
+#derive(Eq)
+pub struct HazardReview {
+  unit : LoadUnit
+  cargos : Array[Cargo]
+  pairs : Array[HazardPairRule]
+  record_id : String
+  reviewer : String
+  evidence : String
+}
+
+///|
+pub fn HazardReview::new(
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  pairs : Array[HazardPairRule],
+  record_id : String,
+  reviewer : String,
+  evidence : String,
+) -> HazardReview {
+  {
+    unit: { ..unit, axles: unit.axles.copy(), },
+    cargos: cargos.copy(),
+    pairs: pairs.copy(),
+    record_id,
+    reviewer,
+    evidence,
+  }
+}
+
+///|
+fn HazardReview::matches(
+  self : HazardReview,
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  pairs : Array[HazardPairRule],
+) -> Bool {
+  self.unit == unit &&
+  self.cargos == cargos &&
+  self.pairs == pairs &&
+  self.record_id.trim().length() > 0 &&
+  self.reviewer.trim().length() > 0 &&
+  self.evidence.trim().length() > 0
+}
+
+///|
+/// Checks the entire submitted manifest, including unplaced goods. Unknown pairs,
+/// missing/stale reviews and explicit prohibitions block the whole job. A split
+/// requires a new manifest and a new review, never a side effect of box spacing.
+pub fn assess_hazards(
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  rules : StowRules,
+) -> Array[Violation] {
+  let out : Array[Violation] = []
+  let mut regulated = false
+  for i in 0..<cargos.length() {
+    let c = cargos[i]
+    if !c.hazard.is_valid() {
+      out.push(
+        Violation::new(
+          HazardInputInvalid,
+          Error,
+          c.id,
+          "",
+          "malformed dangerous goods declaration; no substance lookup performed",
+        ),
+      )
+    }
+    if c.hazard.class.is_regulated() {
+      regulated = true
+      if c.hazard.declaration_ref.trim().length() == 0 {
+        out.push(
+          Violation::new(
+            HazardReviewRequired,
+            Error,
+            c.id,
+            "",
+            "missing SDS/declaration revision reference",
+          ),
+        )
+      }
+    }
+    for j in (i + 1)..<cargos.length() {
+      let other = cargos[j]
+      if c.id == other.id {
+        out.push(
+          Violation::new(
+            DuplicateCargo,
+            Error,
+            c.id,
+            other.id,
+            "duplicate manifest id",
+          ),
+        )
+      }
+      if !c.hazard.class.is_regulated() && !other.hazard.class.is_regulated() {
+        continue
+      }
+      let mut found = false
+      for rule in rules.hazard_pairs {
+        if (rule.a == c.hazard && rule.b == other.hazard) ||
+          (rule.b == c.hazard && rule.a == other.hazard) {
+          found = true
+          if rule.rule_id.trim().length() == 0 ||
+            rule.source.trim().length() == 0 {
+            out.push(
+              Violation::new(
+                HazardInputInvalid,
+                Error,
+                c.id,
+                other.id,
+                "pair rule has no id/source",
+              ),
+            )
+          }
+          match rule.relation {
+            ProhibitSameUnit =>
+              out.push(
+                Violation::new(
+                  HazardSameUnitForbidden,
+                  Error,
+                  c.id,
+                  other.id,
+                  "rule " +
+                  rule.rule_id +
+                  ": " +
+                  rule.source +
+                  "; no distance or review overrides this prohibition",
+                ),
+              )
+            ReviewRequired => ()
+          }
+        }
+      }
+      if !found {
+        out.push(
+          Violation::new(
+            HazardRuleUnknown,
+            Error,
+            c.id,
+            other.id,
+            "no relationship for these exact declarations; human assessment and a sourced rule are required",
+          ),
+        )
+      }
+    }
+  }
+  if regulated {
+    match rules.hazard_review {
+      Some(review) =>
+        if review.matches(unit, cargos, rules.hazard_pairs) {
+          out.push(
+            Violation::new(
+              HazardPlanningOnly,
+              Warning,
+              "",
+              unit.id,
+              "planning record " +
+              review.record_id +
+              "; reviewer " +
+              review.reviewer +
+              "; evidence " +
+              review.evidence +
+              "; geometry only, transport approval remains external",
+            ),
+          )
+        } else {
+          out.push(
+            Violation::new(
+              HazardReviewRequired,
+              Error,
+              "",
+              unit.id,
+              "missing fields or stale manifest/unit/rule snapshot in review",
+            ),
+          )
+        }
+      None =>
+        out.push(
+          Violation::new(
+            HazardReviewRequired,
+            Error,
+            "",
+            unit.id,
+            "no whole-manifest human review; even one dangerous item requires review",
+          ),
+        )
+    }
+  }
+  out
+}
+
+///|
+/// A blocked job retains all goods and findings without manufacturing a split.
+fn blocked_plan(
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  rules : StowRules,
+) -> LoadPlan? {
+  let invalid = validate_input(unit, cargos, rules)
+  let findings = assess_hazards(unit, cargos, rules)
+  for v in invalid {
+    findings.push(v)
+  }
+  if is_clear(findings) {
+    return None
+  }
+  let unplaced : Array[Unplaced] = []
+  for c in cargos {
+    unplaced.push({
+      cargo_id: c.id,
+      reason: "input or hazard assessment blocked the whole manifest; inspect violations",
+    })
+  }
+  Some({
+    unit_id: unit.id,
+    unit_kind: unit.kind,
+    placements: [],
+    unplaced,
+    metrics: if invalid.length() == 0 {
+      compute_metrics(unit, cargos, [])
+    } else {
+      {
+        ..compute_metrics(LoadUnit::container_20ft(unit.id), [], []),
+        cargo_count: cargos.length(),
+        capacity_volume_mm3: 0L,
+        payload_limit_g: 0,
+      }
+    },
+    violations: findings,
+  })
 }
 
 ///|
@@ -272,3 +433,12 @@ pub extend PackingGroup with Eq::{equal, not_equal}
 
 ///|
 pub extend Hazard with Eq::{equal, not_equal}
+
+///|
+pub extend HazardRelation with Eq::{equal, not_equal}
+
+///|
+pub extend HazardPairRule with Eq::{equal, not_equal}
+
+///|
+pub extend HazardReview with Eq::{equal, not_equal}

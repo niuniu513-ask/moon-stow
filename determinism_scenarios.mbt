@@ -67,10 +67,15 @@ test "stress: a hundred small cartons fit a 40HC and stay legal" {
   assert_true(placed > 90)
   assert_eq(placed + plan.unplaced.length(), cargos.length())
   let findings = verify(unit, cargos, plan.placements, rules)
-  assert_eq(is_clear(findings), true)
+  for finding in findings {
+    assert_true(finding.kind == MissingCargo || finding.severity != Error)
+  }
+  assert_eq(count_by_severity(findings, Error), plan.unplaced.length())
   // Balancing must not invent overlaps either.
   let balanced = balance_load(unit, plan.placements, cargos)
-  assert_eq(is_clear(verify(unit, cargos, balanced, rules)), true)
+  for finding in verify(unit, cargos, balanced, rules) {
+    assert_true(finding.kind == MissingCargo || finding.severity != Error)
+  }
 }
 
 ///|
@@ -86,7 +91,10 @@ test "stress: palletizing uniform cartons fills the columns" {
   let plan = palletize(unit, cargos, StowRules::default())
   // Six per band, three bands deep is the per-cargo layer limit.
   assert_eq(plan.placements.length(), 18)
-  assert_eq(is_clear(plan.violations), true)
+  for finding in plan.violations {
+    assert_true(finding.kind == MissingCargo || finding.severity != Error)
+  }
+  assert_eq(count_by_severity(plan.violations, Error), 6)
   // Every band holds six boxes and the depth stops at the per-cargo limit.
   let layers = compute_layers(plan.placements)
   assert_eq(layers.length(), plan.placements.length())

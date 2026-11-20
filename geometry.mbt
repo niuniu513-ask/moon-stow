@@ -2,11 +2,12 @@
 /// Cargo dimensions along the cargo's own axes: `length` runs along the load
 /// unit's X axis, `width` along Y and `height` along Z. Origin is the floor at
 /// the load unit's inside rear-left corner.
+#derive(Eq)
 pub(all) struct Dimensions {
   length : Int32
   width : Int32
   height : Int32
-} derive(Eq)
+}
 
 ///|
 pub fn Dimensions::new(
@@ -31,6 +32,7 @@ pub fn Dimensions::volume_mm3(self : Dimensions) -> Int64 {
 /// The six axis aligned orientations of a box. The names list which cargo axis
 /// ends up on the load unit's X, Y and Z axis, so `WLH` means "width along X,
 /// length along Y, height stays vertical".
+#derive(Eq)
 pub(all) enum Orientation {
   LWH
   WLH
@@ -38,7 +40,7 @@ pub(all) enum Orientation {
   HLW
   WHL
   HWL
-} derive(Eq)
+}
 
 ///|
 pub fn Orientation::all() -> Array[Orientation] {
@@ -85,11 +87,12 @@ pub fn Dimensions::oriented(
 
 ///|
 /// Integer point, always the minimum corner of an axis aligned box here.
+#derive(Eq)
 pub(all) struct Point3 {
   x : Int32
   y : Int32
   z : Int32
-} derive(Eq)
+}
 
 ///|
 pub fn Point3::new(x : Int32, y : Int32, z : Int32) -> Point3 {
@@ -99,10 +102,11 @@ pub fn Point3::new(x : Int32, y : Int32, z : Int32) -> Point3 {
 ///|
 /// Axis aligned box: minimum corner plus extents. Half-open intervals are used
 /// everywhere, so two boxes that only share a face do not overlap.
+#derive(Eq)
 pub(all) struct Aabb {
   min : Point3
   size : Dimensions
-} derive(Eq)
+}
 
 ///|
 pub fn Aabb::new(min : Point3, size : Dimensions) -> Aabb {
@@ -177,24 +181,44 @@ pub fn Aabb::footprint_overlap(a : Aabb, b : Aabb) -> Int32 {
 /// do not interpenetrate.
 pub fn Aabb::supported_area(self : Aabb, below : Array[Aabb]) -> Int32 {
   let own = self.size.length * self.size.width
-  let mut supported = 0
+  let mut supported = 0L
   for i in 0..<below.length() {
     let other = below[i]
     if other.max_z() == self.min.z {
-      supported = supported + self.footprint_overlap(other)
+      supported = supported + self.footprint_overlap(other).to_int64()
     }
   }
-  min_i(supported, own)
+  min64(supported, own.to_int64()).to_int()
 }
 
 ///|
 /// Manhattan distance between the closest faces of two boxes: 0 when they touch
-/// or overlap, so hazard separation can be expressed as a clearance.
+/// or overlap. This geometric metric has no regulatory segregation meaning, and
+/// it is not what a declared clearance means: see `side_gap`.
 pub fn Aabb::gap(a : Aabb, b : Aabb) -> Int32 {
   let dx = max_i(0, max_i(b.min.x - a.max_x(), a.min.x - b.max_x()))
   let dy = max_i(0, max_i(b.min.y - a.max_y(), a.min.y - b.max_y()))
   let dz = max_i(0, max_i(b.min.z - a.max_z(), a.min.z - b.max_z()))
   dx + dy + dz
+}
+
+///|
+/// True when the two boxes share any height band, which is when a declared
+/// lateral clearance between them is geometrically meaningful. Boxes that are
+/// stacked (one top face exactly on the other bottom face) or separated
+/// vertically do not share a band, so stacking never violates a clearance.
+pub fn Aabb::shares_height(a : Aabb, b : Aabb) -> Bool {
+  min_i(a.max_z(), b.max_z()) - max_i(a.min.z, b.min.z) > 0
+}
+
+///|
+/// Horizontal (x + y) distance between the closest faces: 0 when the footprints
+/// touch or overlap. Vertical contact is deliberately ignored so that clearance
+/// describes side-by-side separation only; no regulatory meaning.
+pub fn Aabb::side_gap(a : Aabb, b : Aabb) -> Int32 {
+  let dx = max_i(0, max_i(b.min.x - a.max_x(), a.min.x - b.max_x()))
+  let dy = max_i(0, max_i(b.min.y - a.max_y(), a.min.y - b.max_y()))
+  dx + dy
 }
 
 ///|
@@ -230,6 +254,23 @@ test "geometry: face contact is not collision" {
   assert_false(a.intersects(b))
   assert_eq(a.overlap_volume(b), 0L)
   assert_eq(a.gap(b), 0)
+}
+
+///|
+test "geometry: side clearance ignores vertical contact" {
+  let base = Aabb::at(0, 0, 0, Dimensions::new(400, 400, 400))
+  let stacked = Aabb::at(0, 0, 400, Dimensions::new(400, 400, 400))
+  // A stacked pair touches, so the Manhattan gap is zero…
+  assert_eq(base.gap(stacked), 0)
+  // …but it shares no height band, so no lateral clearance applies.
+  assert_false(base.shares_height(stacked))
+  assert_eq(base.side_gap(stacked), 0)
+  let beside = Aabb::at(450, 0, 0, Dimensions::new(400, 400, 400))
+  assert_true(base.shares_height(beside))
+  assert_eq(base.side_gap(beside), 50)
+  assert_eq(base.gap(beside), 50)
+  let diagonal = Aabb::at(450, 460, 0, Dimensions::new(400, 400, 400))
+  assert_eq(diagonal.side_gap(base), 110)
 }
 
 ///|

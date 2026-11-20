@@ -21,7 +21,8 @@ pub fn summary_line(plan : LoadPlan) -> String {
   errors.to_string() +
   " error(s), " +
   warnings.to_string() +
-  " warning(s)"
+  " warning(s); " +
+  planning_scope(plan)
 }
 
 ///|
@@ -238,7 +239,7 @@ pub fn render_markdown(plan : LoadPlan, cargos : Array[Cargo]) -> String {
 ///|
 /// Machine readable placement list (RFC 4180 quoting for the id field).
 pub fn render_csv(plan : LoadPlan, cargos : Array[Cargo]) -> String {
-  let mut out = "cargo_id,stop,layer,orientation,x_mm,y_mm,z_mm,length_mm,width_mm,height_mm,weight_kg\n"
+  let mut out = "cargo_id,stop,layer,orientation,x_mm,y_mm,z_mm,length_mm,width_mm,height_mm,weight_kg,planning_scope\n"
   for p in sort_placements(plan.placements) {
     let weight = match cargo_of(cargos, p.cargo_index) {
       Some(c) => format_kg(c.weight_g)
@@ -266,6 +267,8 @@ pub fn render_csv(plan : LoadPlan, cargos : Array[Cargo]) -> String {
       p.box.size.height.to_string() +
       "," +
       weight +
+      "," +
+      planning_scope(plan) +
       "\n"
   }
   out
@@ -277,6 +280,10 @@ pub fn render_csv(plan : LoadPlan, cargos : Array[Cargo]) -> String {
 pub fn render_manifest(plan : LoadPlan, cargos : Array[Cargo]) -> String {
   let stops = stop_weights(plan.placements, cargos)
   let mut out = "MANIFEST " + plan.unit_id + "\n"
+  out = out +
+    "SCOPE " +
+    planning_scope(plan) +
+    "; transport approval remains external\n"
   for pair in stops {
     let (stop, weight) = pair
     out = out + "\nSTOP " + stop.to_string() + "  (" + format_kg(weight) + ")\n"

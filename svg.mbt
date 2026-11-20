@@ -149,7 +149,7 @@ fn render_svg_for(
     envelope.height,
     scale_permille(width_px, envelope.length),
   )
-  let total_h = top_h + side_h + 96
+  let total_h = top_h + side_h + 112
   let mut out = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
     width_px.to_string() +
     "\" height=\"" +
@@ -166,16 +166,20 @@ fn render_svg_for(
     " " +
     xml_escape(plan.unit_id) +
     " - " +
-    summary_line(plan) +
+    xml_escape(summary_line(plan)) +
     "</text>\n"
-  out = out + "<g transform=\"translate(0,32)\">\n" + top + "\n</g>\n"
+  out = out +
+    "<text x=\"4\" y=\"36\" font-size=\"11\" font-family=\"sans-serif\">" +
+    planning_scope(plan) +
+    "; transport approval remains external</text>\n"
+  out = out + "<g transform=\"translate(0,48)\">\n" + top + "\n</g>\n"
   out = out +
     "<g transform=\"translate(0," +
-    (top_h + 56).to_string() +
+    (top_h + 72).to_string() +
     ")\">\n" +
     side +
     "\n</g>\n"
-  out = out + legend(plan, width_px, top_h + side_h + 78) + "\n"
+  out = out + legend(plan, width_px, top_h + side_h + 94) + "\n"
   out = out + "</svg>\n"
   out
 }

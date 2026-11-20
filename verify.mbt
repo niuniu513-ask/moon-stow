@@ -29,7 +29,15 @@ pub fn verify(
   placements : Array[Placement],
   rules : StowRules,
 ) -> Array[Violation] {
-  let out : Array[Violation] = []
+  let out = assess_hazards(unit, cargos, rules)
+  let invalid = validate_input(unit, cargos, rules)
+  for v in invalid {
+    out.push(v)
+  }
+  if invalid.length() > 0 {
+    return out
+  }
+  let layers = compute_layers(placements)
   let envelope = unit.envelope()
   // 1. identity checks
   let seen : Array[String] = []
@@ -84,7 +92,7 @@ pub fn verify(
     }
     if !found {
       out.push(
-        Violation::new(MissingCargo, Warning, cargos[i].id, "", "no placement"),
+        Violation::new(MissingCargo, Error, cargos[i].id, "", "no placement"),
       )
     }
   }
@@ -146,11 +154,59 @@ pub fn verify(
       )
     }
   }
+  // Reject invalid coordinates before support, pressure or graph calculations.
+  for p in placements {
+    if !valid_dimensions(p.box.size) ||
+      p.box.min.x < 0 ||
+      p.box.min.y < 0 ||
+      p.box.min.z < 0 ||
+      p.box.min.x > 30_000 ||
+      p.box.min.y > 30_000 ||
+      p.box.min.z > 30_000 {
+      out.push(
+        Violation::new(
+          InputInvalid,
+          Error,
+          p.cargo_id,
+          "",
+          "invalid placement geometry",
+        ),
+      )
+      return out
+    }
+  }
   // 3. collisions
   for i in 0..<placements.length() {
     for j in (i + 1)..<placements.length() {
       let a = placements[i]
       let b = placements[j]
+      if a.cargo_index >= 0 &&
+        a.cargo_index < cargos.length() &&
+        b.cargo_index >= 0 &&
+        b.cargo_index < cargos.length() {
+        let required = max_i(
+          cargos[a.cargo_index].min_gap_mm,
+          cargos[b.cargo_index].min_gap_mm,
+        )
+        // A declared clearance is a lateral requirement: a cargo stacked on
+        // another touches it vertically and cannot also keep a horizontal gap.
+        // Only pairs that share a height band are compared.
+        if required > 0 &&
+          a.box.shares_height(b.box) &&
+          a.box.side_gap(b.box) < required {
+          out.push(
+            Violation::new(
+              CargoGap,
+              Error,
+              a.cargo_id,
+              b.cargo_id,
+              "declared lateral clearance " +
+              required.to_string() +
+              " mm not met; no regulatory meaning",
+            ),
+          )
+        }
+      }
       if a.box.intersects(b.box) {
         out.push(
           Violation::new(
@@ -174,7 +230,11 @@ pub fn verify(
       }
       let own_area = p.box.size.length * p.box.size.width
       let supported = p.box.supported_area(below)
-      let ratio = if own_area <= 0 { 0 } else { supported * 1000 / own_area }
+      let ratio = if own_area <= 0 {
+        0
+      } else {
+        (supported.to_int64() * 1000L / own_area.to_int64()).to_int()
+      }
       if below.length() == 0 {
         out.push(
           Violation::new(
@@ -204,7 +264,18 @@ pub fn verify(
       continue
     }
     let cargo = cargos[p.cargo_index]
-    let layer = layer_of(placements, i)
+    let layer = layers[i]
+    if p.stop != cargo.stop || p.layer != layer {
+      out.push(
+        Violation::new(
+          PlacementMetadata,
+          Error,
+          p.cargo_id,
+          "",
+          "stop or layer metadata was changed independently of cargo/support graph",
+        ),
+      )
+    }
     if layer > cargo.max_stack_layers {
       out.push(
         Violation::new(
@@ -258,6 +329,19 @@ pub fn verify(
             p.cargo_id,
             support.cargo_id,
             "stack taller than the support allows",
+          ),
+        )
+      }
+    }
+    for upper in upper_items(placements, i) {
+      if layers[upper] > cargo.max_stack_layers {
+        out.push(
+          Violation::new(
+            StackLayersExceeded,
+            Error,
+            placements[upper].cargo_id,
+            p.cargo_id,
+            "an ancestor support limits the full stack height",
           ),
         )
       }
@@ -378,51 +462,22 @@ pub fn verify(
     }
     None => ()
   }
-  // 7. dangerous goods separation
-  for i in 0..<placements.length() {
-    for j in (i + 1)..<placements.length() {
-      let a = placements[i]
-      let b = placements[j]
-      if a.cargo_index < 0 ||
-        a.cargo_index >= cargos.length() ||
-        b.cargo_index < 0 ||
-        b.cargo_index >= cargos.length() {
-        continue
-      }
-      let ha = cargos[a.cargo_index].hazard.class
-      let hb = cargos[b.cargo_index].hazard.class
-      let level = segregation_level(ha, hb)
-      if level > 0 {
-        let required = rules.clearance(level)
-        let gap = a.box.gap(b.box)
-        if gap < required {
-          out.push(
-            Violation::new(
-              HazardClearance,
-              Error,
-              a.cargo_id,
-              b.cargo_id,
-              "class " +
-              ha.code() +
-              " vs " +
-              hb.code() +
-              " needs " +
-              (required / 1000).to_string() +
-              " m, have " +
-              format_m(gap),
-            ),
-          )
-        }
-      }
-    }
-  }
+  // 7. Whole-manifest hazard assessment is performed before geometry.
   // 8. overstow: nothing may sit in front of an earlier delivery
   if rules.enforce_overstow {
     for i in 0..<placements.length() {
       for j in (i + 1)..<placements.length() {
         let a = placements[i]
         let b = placements[j]
-        if a.stop == b.stop {
+        if a.cargo_index < 0 ||
+          a.cargo_index >= cargos.length() ||
+          b.cargo_index < 0 ||
+          b.cargo_index >= cargos.length() {
+          continue
+        }
+        let a_stop = cargos[a.cargo_index].stop
+        let b_stop = cargos[b.cargo_index].stop
+        if a_stop == b_stop {
           continue
         }
         let overlap_y = min_i(a.box.max_y(), b.box.max_y()) -
@@ -432,9 +487,17 @@ pub fn verify(
         if overlap_y <= 0 || overlap_z <= 0 {
           continue
         }
-        let a_in_front = a.box.max_x() <= b.box.min.x
-        let b_in_front = b.box.max_x() <= a.box.min.x
-        if a_in_front && a.stop > b.stop {
+        let a_in_front = if unit.rear_door_at_origin {
+          a.box.max_x() <= b.box.min.x
+        } else {
+          b.box.max_x() <= a.box.min.x
+        }
+        let b_in_front = if unit.rear_door_at_origin {
+          b.box.max_x() <= a.box.min.x
+        } else {
+          a.box.max_x() <= b.box.min.x
+        }
+        if a_in_front && a_stop > b_stop {
           out.push(
             Violation::new(
               Overstow,
@@ -448,7 +511,7 @@ pub fn verify(
             ),
           )
         }
-        if b_in_front && b.stop > a.stop {
+        if b_in_front && b_stop > a_stop {
           out.push(
             Violation::new(
               Overstow,

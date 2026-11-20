@@ -2,12 +2,13 @@
 /// A shippable carton from the warehouse catalogue. `cost_cents` is the landed
 /// cost of the box plus the filler needed to protect the goods, which is what an
 /// operator actually minimises; `inner` is the usable inside size.
+#derive(Eq)
 pub(all) struct CartonSpec {
   id : String
   inner : Dimensions
   max_weight_g : Int32
   cost_cents : Int32
-} derive(Eq)
+}
 
 ///|
 pub extend CartonSpec with Eq::{equal, not_equal}
@@ -39,15 +40,17 @@ pub fn CartonSpec::as_unit(self : CartonSpec) -> LoadUnit {
 
 ///|
 /// One chosen carton together with the placement of the goods inside it.
+#derive(Eq)
 pub(all) struct CartonPick {
   carton : CartonSpec
   plan : LoadPlan
-} derive(Eq)
+}
 
 ///|
 pub extend CartonPick with Eq::{equal, not_equal}
 
 ///|
+#derive(Eq)
 pub(all) struct Cartonization {
   picks : Array[CartonPick]
   unpacked : Array[Unplaced]
@@ -55,7 +58,7 @@ pub(all) struct Cartonization {
   total_inner_volume_mm3 : Int64
   goods_volume_mm3 : Int64
   void_fill_permille : Int32
-} derive(Eq)
+}
 
 ///|
 pub extend Cartonization with Eq::{equal, not_equal}
@@ -63,7 +66,7 @@ pub extend Cartonization with Eq::{equal, not_equal}
 ///|
 /// Volumetric weight used by parcel carriers (1 kg per 5 litres), in grams.
 pub fn volumetric_weight_g(dims : Dimensions) -> Int32 {
-  (dims.volume_mm3() / 5_000L).to_int()
+  min64((dims.volume_mm3() + 4_999L) / 5_000L, 2_147_483_647L).to_int()
 }
 
 ///|
@@ -85,6 +88,45 @@ pub fn cartonize(
   goods : Array[Cargo],
   rules : StowRules,
 ) -> Cartonization {
+  // Carton selection changes the manifest and unit. Never infer chemical splits.
+  for c in goods {
+    if c.hazard.class.is_regulated() || !c.hazard.is_valid() {
+      let unpacked : Array[Unplaced] = []
+      for item in goods {
+        unpacked.push({
+          cargo_id: item.id,
+          reason: "dangerous goods cartonization requires externally reviewed separate manifests",
+        })
+      }
+      return {
+        picks: [],
+        unpacked,
+        total_cost_cents: 0,
+        total_inner_volume_mm3: 0L,
+        goods_volume_mm3: 0L,
+        void_fill_permille: 0,
+      }
+    }
+  }
+  let initial = LoadUnit::container_20ft("input-validation")
+  if !is_clear(validate_input(initial, goods, rules)) ||
+    !is_clear(assess_hazards(initial, goods, rules)) {
+    let unpacked : Array[Unplaced] = []
+    for c in goods {
+      unpacked.push({
+        cargo_id: c.id,
+        reason: "invalid cartonization manifest or rules",
+      })
+    }
+    return {
+      picks: [],
+      unpacked,
+      total_cost_cents: 0,
+      total_inner_volume_mm3: 0L,
+      goods_volume_mm3: 0L,
+      void_fill_permille: 0,
+    }
+  }
   let picks : Array[CartonPick] = []
   let unpacked : Array[Unplaced] = []
   let remaining : Array[Int32] = []
@@ -92,45 +134,37 @@ pub fn cartonize(
     remaining.push(i)
   }
   let order = order_by_volume(goods)
-  let mut rounds = 0
-  while remaining.length() > 0 && rounds < 200 {
-    rounds = rounds + 1
+  while remaining.length() > 0 {
     let mut best_carton : CartonSpec? = None
     let mut best_indices : Array[Int32] = []
     let mut best_plan : LoadPlan? = None
     for spec in catalog {
       let unit = spec.as_unit()
-      // try to fit as many of the remaining goods as possible, largest first
-      let mut count = 1
+      if spec.cost_cents < 0 ||
+        !is_clear(validate_input(unit, [], rules)) ||
+        spec.inner.volume_mm3() > 8_000_000_000_000L {
+        continue
+      }
       let mut chosen_plan : LoadPlan? = None
-      let mut chosen_indices : Array[Int32] = []
-      while count <= remaining.length() {
-        let subset : Array[Cargo] = []
-        let subset_idx : Array[Int32] = []
-        let mut taken = 0
-        for idx in order {
-          if taken >= count {
-            break
-          }
-          let mut still_remaining = false
-          for r in remaining {
-            if r == idx {
-              still_remaining = true
-            }
-          }
-          if still_remaining {
-            subset.push(goods[idx])
-            subset_idx.push(idx)
-            taken = taken + 1
+      let chosen_indices : Array[Int32] = []
+      let selected : Array[Cargo] = []
+      for idx in order {
+        let mut available = false
+        for r in remaining {
+          if r == idx {
+            available = true
           }
         }
-        let plan = pack(unit, subset, rules)
+        if !available {
+          continue
+        }
+        let trial = selected.copy()
+        trial.push(goods[idx])
+        let plan = pack(unit, trial, rules)
         if plan.unplaced.length() == 0 && is_clear(plan.violations) {
+          selected.push(goods[idx])
+          chosen_indices.push(idx)
           chosen_plan = Some(plan)
-          chosen_indices = subset_idx
-          count = count + 1
-        } else {
-          break
         }
       }
       match chosen_plan {
@@ -164,7 +198,14 @@ pub fn cartonize(
     }
     match best_plan {
       Some(plan) => {
-        picks.push({ carton: best_carton.unwrap(), plan, })
+        let mapped : Array[Placement] = []
+        for p in plan.placements {
+          mapped.push({ ..p, cargo_index: best_indices[p.cargo_index], })
+        }
+        picks.push({
+          carton: best_carton.unwrap(),
+          plan: { ..plan, placements: mapped, },
+        })
         let kept : Array[Int32] = []
         for r in remaining {
           let mut used = false
@@ -194,21 +235,38 @@ pub fn cartonize(
       }
     }
   }
-  let mut cost = 0
+  let mut cost = 0L
   let mut inner_volume = 0L
   let mut goods_volume = 0L
   for pick in picks {
-    cost = cost + pick.carton.cost_cents
+    cost = cost + pick.carton.cost_cents.to_int64()
     inner_volume = inner_volume + pick.carton.inner.volume_mm3()
     for p in pick.plan.placements {
       goods_volume = goods_volume + p.box.volume_mm3()
+    }
+  }
+  if cost > 2_000_000_000L {
+    let invalid : Array[Unplaced] = []
+    for c in goods {
+      invalid.push({
+        cargo_id: c.id,
+        reason: "total carton cost exceeds supported integer range",
+      })
+    }
+    return {
+      picks: [],
+      unpacked: invalid,
+      total_cost_cents: 0,
+      total_inner_volume_mm3: 0L,
+      goods_volume_mm3: 0L,
+      void_fill_permille: 0,
     }
   }
   let used = inner_volume - goods_volume
   {
     picks,
     unpacked,
-    total_cost_cents: cost,
+    total_cost_cents: cost.to_int(),
     total_inner_volume_mm3: inner_volume,
     goods_volume_mm3: goods_volume,
     void_fill_permille: ratio_permille(used, inner_volume),

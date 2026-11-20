@@ -75,6 +75,36 @@ fn Packer::layer_for(self : Packer, supports : Array[Int32]) -> Int32 {
 }
 
 ///|
+fn Packer::ancestors(self : Packer, supports : Array[Int32]) -> Array[Int32] {
+  let out : Array[Int32] = []
+  for s in supports {
+    out.push(s)
+  }
+  let mut cursor = 0
+  while cursor < out.length() {
+    let current = self.placed[out[cursor]]
+    cursor = cursor + 1
+    for i in 0..<self.placed.length() {
+      let below = self.placed[i]
+      if below.box.min.z < current.box.min.z &&
+        below.box.max_z() == current.box.min.z &&
+        below.box.footprint_overlap(current.box) > 0 {
+        let mut seen = false
+        for v in out {
+          if v == i {
+            seen = true
+          }
+        }
+        if !seen {
+          out.push(i)
+        }
+      }
+    }
+  }
+  out
+}
+
+///|
 /// May `cargo_index` be placed with exactly this box? Every rule that the
 /// verifier checks is enforced here as well, so a plan that the packer produces
 /// never fails its own audit.
@@ -85,7 +115,16 @@ fn Packer::fits(self : Packer, cargo_index : Int32, box : Aabb) -> Bool {
   let cargo = self.cargos[cargo_index]
   // solid overlap
   for i in 0..<self.placed.length() {
-    if box.intersects(self.placed[i].box) {
+    let other = self.cargos[self.placed[i].cargo_index]
+    let required = max_i(cargo.min_gap_mm, other.min_gap_mm)
+    // Same rule as verify: clearance is lateral, so it is only enforced against
+    // cargo that shares a height band; stacking stays possible.
+    if box.intersects(self.placed[i].box) ||
+      (
+        required > 0 &&
+        box.shares_height(self.placed[i].box) &&
+        box.side_gap(self.placed[i].box) < required
+      ) {
       return false
     }
   }
@@ -104,11 +143,13 @@ fn Packer::fits(self : Packer, cargo_index : Int32, box : Aabb) -> Bool {
     for s in supports {
       below.push(self.placed[s].box)
     }
-    let ratio = box.supported_area(below) * 1000 / own_area
+    let ratio = (box.supported_area(below).to_int64() *
+    1000L /
+    own_area.to_int64()).to_int()
     if ratio < self.rules.min_support_permille {
       return false
     }
-    for s in supports {
+    for s in self.ancestors(supports) {
       let slot = self.placed[s]
       let support_cargo = self.cargos[slot.cargo_index]
       if !support_cargo.stackable {
@@ -118,6 +159,18 @@ fn Packer::fits(self : Packer, cargo_index : Int32, box : Aabb) -> Bool {
         return false
       }
       if slot.load_on_top_g + cargo.weight_g > support_cargo.max_top_load_g {
+        return false
+      }
+      if slot.box.min.z == 0 &&
+        self.unit.floor_limit_g_per_m2 > 0 &&
+        (
+          support_cargo.weight_g.to_int64() +
+          slot.load_on_top_g.to_int64() +
+          cargo.weight_g.to_int64()
+        ) *
+        1_000_000L /
+        floor_area_mm2(slot.box.size) >
+        self.unit.floor_limit_g_per_m2.to_int64() {
         return false
       }
     }
@@ -155,21 +208,22 @@ fn Packer::fits(self : Packer, cargo_index : Int32, box : Aabb) -> Bool {
       if overlap_y <= 0 || overlap_z <= 0 {
         continue
       }
-      if other_stop < cargo.stop && box.min.x < slot.box.max_x() {
+      if other_stop < cargo.stop &&
+        (if self.unit.rear_door_at_origin {
+          box.min.x < slot.box.max_x()
+        } else {
+          box.max_x() > slot.box.min.x
+        }) {
         return false
       }
-      if other_stop > cargo.stop && box.max_x() > slot.box.min.x {
+      if other_stop > cargo.stop &&
+        (if self.unit.rear_door_at_origin {
+          box.max_x() > slot.box.min.x
+        } else {
+          box.min.x < slot.box.max_x()
+        }) {
         return false
       }
-    }
-  }
-  // dangerous goods separation
-  for i in 0..<self.placed.length() {
-    let slot = self.placed[i]
-    let other = self.cargos[slot.cargo_index]
-    let level = segregation_level(cargo.hazard.class, other.hazard.class)
-    if level > 0 && box.gap(slot.box) < self.rules.clearance(level) {
-      return false
     }
   }
   true
@@ -180,7 +234,7 @@ fn Packer::fits(self : Packer, cargo_index : Int32, box : Aabb) -> Bool {
 fn Packer::commit(self : Packer, cargo_index : Int32, cand : Candidate) -> Unit {
   let cargo = self.cargos[cargo_index]
   let supports = self.supports_of_box(cand.box)
-  for s in supports {
+  for s in self.ancestors(supports) {
     self.placed[s].load_on_top_g = self.placed[s].load_on_top_g + cargo.weight_g
   }
   // The layer is derived from what actually carries the box. A caller may only
@@ -285,14 +339,51 @@ pub fn pack_ordered(
   rules : StowRules,
   order : Array[Int32],
 ) -> LoadPlan {
+  match blocked_plan(unit, cargos, rules) {
+    Some(blocked) => return blocked
+    None => ()
+  }
   let packer = Packer::new(unit, cargos, rules)
   let points : Array[Point3] = [Point3::new(0, 0, 0)]
   let unplaced : Array[Unplaced] = []
+  let attempted : Array[Int32] = []
   for cargo_index in order {
     if cargo_index < 0 || cargo_index >= cargos.length() {
       continue
     }
+    let mut duplicate = false
+    for i in attempted {
+      if i == cargo_index {
+        duplicate = true
+      }
+    }
+    if duplicate {
+      continue
+    }
+    attempted.push(cargo_index)
     let cargo = cargos[cargo_index]
+    for slot in packer.placed {
+      let gap = max_i(cargo.min_gap_mm, cargos[slot.cargo_index].min_gap_mm)
+      if gap > 0 {
+        push_point(
+          points,
+          Point3::new(slot.box.max_x() + gap, slot.box.min.y, slot.box.min.z),
+          packer.envelope,
+        )
+        push_point(
+          points,
+          Point3::new(slot.box.min.x, slot.box.max_y() + gap, slot.box.min.z),
+          packer.envelope,
+        )
+        // Stacking candidate: exactly on the top face. A lateral clearance must
+        // not lift cargo off its support, which would make it unsupported.
+        push_point(
+          points,
+          Point3::new(slot.box.min.x, slot.box.min.y, slot.box.max_z()),
+          packer.envelope,
+        )
+      }
+    }
     let mut best : Candidate? = None
     for o in cargo.upright.allowed() {
       let od = cargo.dims.oriented(o)
@@ -313,7 +404,7 @@ pub fn pack_ordered(
         let supported = if area <= 0 {
           0
         } else {
-          box.supported_area(below) * 1000 / area
+          (box.supported_area(below).to_int64() * 1000L / area.to_int64()).to_int()
         }
         let cand = {
           box,
@@ -356,6 +447,20 @@ pub fn pack_ordered(
           cargo_id: cargo.id,
           reason: "no feasible position left in the unit",
         })
+    }
+  }
+  for i in 0..<cargos.length() {
+    let mut seen = false
+    for v in attempted {
+      if v == i {
+        seen = true
+      }
+    }
+    if !seen {
+      unplaced.push({
+        cargo_id: cargos[i].id,
+        reason: "cargo omitted from explicit packing order",
+      })
     }
   }
   let placements = balance_load(

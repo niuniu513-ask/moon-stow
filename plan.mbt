@@ -1,6 +1,7 @@
 ///|
 /// One cargo box in its final position. `layer` is the 1-based height layer of
 /// the stack the box belongs to, which is what a loader reads first.
+#derive(Eq)
 pub(all) struct Placement {
   cargo_id : String
   cargo_index : Int32
@@ -8,17 +9,19 @@ pub(all) struct Placement {
   box : Aabb
   stop : Int32
   layer : Int32
-} derive(Eq)
+}
 
 ///|
+#derive(Eq)
 pub(all) struct Unplaced {
   cargo_id : String
   reason : String
-} derive(Eq)
+}
 
 ///|
 /// Derived numbers for a plan. Every field is computed from the placements, so a
 /// hand edited plan can be re-scored and compared with the automatic one.
+#derive(Eq)
 pub(all) struct PlanMetrics {
   placed_count : Int32
   cargo_count : Int32
@@ -35,11 +38,12 @@ pub(all) struct PlanMetrics {
   cog_z_mm : Int32
   stack_height_mm : Int32
   stop_weight_g : Array[(Int32, Int32)]
-} derive(Eq)
+}
 
 ///|
 /// A complete loading plan: what goes where, what did not fit, its metrics and
 /// any rule violations found by the verifier.
+#derive(Eq)
 pub(all) struct LoadPlan {
   unit_id : String
   unit_kind : UnitKind
@@ -47,7 +51,28 @@ pub(all) struct LoadPlan {
   unplaced : Array[Unplaced]
   metrics : PlanMetrics
   violations : Array[Violation]
-} derive(Eq)
+}
+
+///|
+/// Scope of the output, never a transport compliance verdict.
+pub fn planning_scope(plan : LoadPlan) -> String {
+  let mut reviewed = false
+  for v in plan.violations {
+    match v.kind {
+      HazardInputInvalid
+      | HazardRuleUnknown
+      | HazardSameUnitForbidden
+      | HazardReviewRequired => return "hazard-blocked"
+      HazardPlanningOnly => reviewed = true
+      _ => ()
+    }
+  }
+  if reviewed {
+    "dangerous-goods-geometry-only"
+  } else {
+    "geometry-only"
+  }
+}
 
 ///|
 pub fn Placement::footprint_mm2(self : Placement) -> Int64 {
@@ -100,48 +125,63 @@ pub fn floor_used_area(placements : Array[Placement]) -> Int64 {
 }
 
 ///|
-/// Sum of the weights that rest directly on `index`.
+/// Each reachable upper item contributes its full weight once. For a bridge
+/// spanning several supports this is deliberately conservative at every support;
+/// it is not an elastic load-sharing model.
+fn upper_items(placements : Array[Placement], index : Int32) -> Array[Int32] {
+  let visited : Array[Int32] = []
+  if index < 0 || index >= placements.length() {
+    return visited
+  }
+  let queue = [index]
+  let mut cursor = 0
+  while cursor < queue.length() {
+    let base = placements[queue[cursor]]
+    cursor = cursor + 1
+    for i in 0..<placements.length() {
+      let other = placements[i]
+      if other.box.min.z > base.box.min.z &&
+        other.box.min.z == base.box.max_z() &&
+        other.box.footprint_overlap(base.box) > 0 {
+        let mut seen = i == index
+        for v in visited {
+          if v == i {
+            seen = true
+          }
+        }
+        if !seen {
+          visited.push(i)
+          queue.push(i)
+        }
+      }
+    }
+  }
+  visited
+}
+
+///|
 pub fn load_on(
   placements : Array[Placement],
   cargos : Array[Cargo],
   index : Int32,
 ) -> Int32 {
-  let target = placements[index]
-  let mut load = 0
-  for i in 0..<placements.length() {
-    if i != index {
-      let other = placements[i]
-      if other.box.min.z == target.box.max_z() &&
-        other.box.footprint_overlap(target.box) > 0 {
-        load = load + cargos[other.cargo_index].weight_g
-      }
+  let mut load = 0L
+  for i in upper_items(placements, index) {
+    let other = placements[i]
+    if other.cargo_index >= 0 && other.cargo_index < cargos.length() {
+      load = load + cargos[other.cargo_index].weight_g.to_int64()
     }
   }
-  load
+  min64(load, 2_147_483_647L).to_int()
 }
 
 ///|
-/// 1-based layer of the stack a box belongs to: one more than the deepest support
-/// below it. Floor standing boxes are layer 1.
+/// Non-recursive derivation also terminates on malformed hand-written layouts.
 pub fn layer_of(placements : Array[Placement], index : Int32) -> Int32 {
-  let target = placements[index]
-  let mut deepest = 0
-  let mut supported = false
-  for i in 0..<placements.length() {
-    if i != index {
-      let other = placements[i]
-      if other.box.max_z() == target.box.min.z &&
-        other.box.footprint_overlap(target.box) > 0 {
-        deepest = max_i(deepest, layer_of(placements, i))
-        supported = true
-      }
-    }
+  if index < 0 || index >= placements.length() {
+    return 0
   }
-  if supported {
-    deepest + 1
-  } else {
-    1
-  }
+  compute_layers(placements)[index]
 }
 
 ///|
