@@ -23,7 +23,7 @@ moon run examples/quickstart
 
 本项目尚未确认Mooncakes发布，不能只添加 `moon.pkg` 导入就认为依赖已安装。
 当前可复现路径是克隆源码后运行仓库内示例；外部包消费需另行配置本地依赖或在实际发布后安装。
-本地未推送的修复不包含在上述远程克隆中，以本轮源码与验证记录为准。
+远程仓库可能落后于本地提交；以 [docs/VALIDATION.md](docs/VALIDATION.md) 记录的提交号为准，先切到该提交再复现。
 
 ```moonbit
 fn main {

@@ -17,7 +17,7 @@ moon run examples/quickstart
 
 | 规则/能力 | 断言位置 | 验证内容 |
 |---|---|---|
-| 几何交叠与支撑面积 | `geometry.mbt` | 两个盒子的交叠体积、支撑面积与曼哈顿间距 |
+| 几何交叠与支撑面积 | `geometry.mbt` | 两个盒子的交叠体积、支撑面积、三轴曼哈顿间距，以及侧向净距与高度带判定 |
 | 六种朝向 | `geometry.mbt` | `Orientation::all()` 与 `keeps_upright()` 的对应关系 |
 | 体积/重量/百分比格式化 | `units.mbt` | m³、kg 与 t、百分比、米的字符串输出 |
 | 危险品整单门控 | `hazard_scenarios.mbt` | 同类具体物质禁配、未知关系、单件复核、快照变化、冲突规则、非法声明与输出边界 |
@@ -69,3 +69,32 @@ moon run examples/quickstart
 超大件旁的小件仍可选箱、声明间距、反向车门/篡改站点、大面积支撑率，以及无效手工布局、
 空载轴荷、数值上限、缺货与严格JSON输入。新工具链已迁移为`#derive`语法。
 Windows Native当前因运行时要求MSVC且本机为MinGW阻断；Wasm/WasmGC/JS结果见私人自查报告。
+
+## 2026-11-20 声明净距语义修正与本轮验证
+
+本轮把 `with_gap` 从"任意一对货物的曼哈顿盒距"改为"同一高度带内并列货物的侧向净距"。
+原实现下，设置声明净距的货物无法互相堆叠（堆叠时盒距必然为 0），装箱器还把堆叠候选点抬到
+`max_z + gap`，产生悬空候选。现在 `geometry.mbt` 提供 `Aabb::side_gap`（只算 x+y）与
+`Aabb::shares_height`，`verify` 与 `pack` 用同一判定：共享高度带才比较侧向净距，堆叠不受限。
+
+| 项目 | 本轮结果 |
+|---|---|
+| 代码提交 | `818d948`（危险品门控重写 + 净距语义 + 回归） |
+| 文档提交 | `1a9355b`；本记录随之提交 |
+| `moon check --deny-warn` | 0 error / 0 warning |
+| `moon test` | 72 passed / 0 failed（净距语义与堆叠各 1 项新增回归） |
+| `moon fmt --check` | no work to do |
+| 六个示例 | quickstart / pallet / cartonize / multistop / hazard / verify 全部 exit 0 |
+| README 代码块 | 用同一段代码重跑，输出与 README 逐字节一致（3 of 3 件、1.792 m³、64.000 kg） |
+| 工具链 | `moonc v0.10.21+06da1ed44`（2026-11-16）；Native 仍需 MSVC，本机 MinGW 未能执行，不计作通过 |
+
+复现命令：
+
+```bash
+git checkout 1a9355b
+moon check --deny-warn
+moon test
+moon fmt --check
+for e in quickstart pallet cartonize multistop hazard verify; do moon run examples/$e; done
+```
+
