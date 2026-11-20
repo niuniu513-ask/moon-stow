@@ -4,7 +4,7 @@
 这里只列调用者最常用的部分，并给出"什么时候该用哪一个"。
 
 长度单位一律毫米（`Int32`），重量单位一律克（`Int32`），体积单位 mm³（`Int64`）。
-没有任何浮点数参与几何判定，同一个输入在任何平台得到同一份装载图。
+几何判定使用整数；当前复测目标为 Wasm、WasmGC 与 JavaScript，Native 另见验证记录。
 
 ## 载具 load_unit.mbt
 
@@ -16,14 +16,18 @@ pub fn LoadUnit::pallet_eur(id : String) -> LoadUnit
 pub fn LoadUnit::pallet_iso(id : String) -> LoadUnit
 pub fn LoadUnit::with_payload(Self, Int32) -> Self
 pub fn LoadUnit::with_axles(Self, Array[Axle]) -> Self
-pub fn LoadUnit::capacity_m3(Self) -> Int64
+pub fn LoadUnit::capacity_mm3(Self) -> Int64
+pub fn LoadUnit::capacity_m3(Self) -> Int64 // 旧名，返回值仍是 mm³
 pub fn LoadUnit::floor_area_m2(Self) -> Double
 ```
 
-内置载具的内尺寸取自 ISO 668、EN 13698-1 与 ISO 6780：20ft 5898×2352×2393、
-40HC 12032×2352×2698、9.6 m 厢式货车 9600×2450×2700、EUR 托盘 1200×800、
-ISO 托盘 1200×1000。`rear_door_at_origin` 记录门在 x=0 端还是远端，多站点场景靠它
-决定"先送的货靠门"。
+内置值是可替换的演示配置，不是标准或设备认证：20ft 内包络 5898×2352×2393 mm，
+40HC 12032×2352×2698 mm；货车长 13600 mm（并非 9.6 m）；EUR/ISO 托盘底面为1200×800/1200×1000 mm。
+ULD 示例仅为矩形包络，未建模真实航空集装器轮廓，不能标作 LD3。
+`capacity_mm3` 返回立方毫米；历史 `capacity_m3` 名称有误，但为兼容保留同样返回值。
+`rear_door_at_origin=false` 使用远端车门进行越站校验；启发式可能返回带越站诊断的未完成方案。
+`Axle.empty_load_g` 为用户提供的空载轴荷，所有空载轴荷之和须等于载具 `tare_g`。
+`Axle::new` 默认空载轴荷为0，可用 `with_empty_load` 设置；默认货车的4t/8t只是演示，不是实际称重。
 
 ## 几何 geometry.mbt
 
@@ -34,12 +38,16 @@ pub fn Dimensions::volume_mm3(Self) -> Int64
 pub fn Aabb::at(x : Int32, y : Int32, z : Int32, size : Dimensions) -> Aabb
 pub fn Aabb::intersects(Self, Self) -> Bool
 pub fn Aabb::gap(Self, Self) -> Int32
+pub fn Aabb::side_gap(Self, Self) -> Int32
+pub fn Aabb::shares_height(Self, Self) -> Bool
 pub fn Aabb::supported_area(Self, Array[Self]) -> Int32
 pub fn Orientation::all() -> Array[Orientation]
 ```
 
-`Orientation` 是六个离散朝向（LWH/WLH/…），`gap` 返回两个盒子之间最近的距离，
-不重叠时为 0；危险品净距与 `min_gap_mm` 都建立在它上面。
+`Orientation` 是六个离散朝向（LWH/WLH/…）。`gap` 是三轴曼哈顿距离，接触或重叠时为 0，
+只用于几何查询；`side_gap` 只算 x+y，`shares_height` 判断两盒是否落在同一高度带。
+声明净距（`with_gap`）判定用后两者的组合：共享高度带才比较侧向净距，堆叠不受限。
+两者都不代表 IMDG 隔离距离。
 
 ## 货物 cargo.mbt
 
@@ -57,7 +65,9 @@ pub fn Cargo::sort_key(Self) -> String
 ```
 
 `with_upright(KeepUpright)` 只允许竖放朝向；`fragile_item()` 等价于"顶上不许压任何东西"；
-`with_gap()` 是这一件四周要留的空隙，用于留通风道或便于人工搬运。
+`with_gap()` 是对"同一高度带上并列"两件货物的最小侧向（x+y）净距，取两件声明值较大者；
+堆叠时两者只是上下接触、不共享高度带，因此声明净距不阻止堆码，包装箱也不会被抬离支撑面。
+这是纯几何参数，不保证通风、消防或 IMDG 类隔离。
 
 ## 规则 rules.mbt
 
@@ -66,7 +76,6 @@ pub fn StowRules::default() -> StowRules
 pub fn StowRules::with_support(Self, permille : Int32) -> Self   // 默认 700‰
 pub fn StowRules::with_cog_margin(Self, permille : Int32) -> Self // 默认 600‰
 pub fn StowRules::with_layer_cap(Self, layers : Int32) -> Self
-pub fn StowRules::clearance(Self, level : Int32) -> Int32
 ```
 
 `with_support` 控制"底面积至少有多少比例被支撑"，`with_cog_margin` 控制重心允许偏离
@@ -75,16 +84,31 @@ pub fn StowRules::clearance(Self, level : Int32) -> Int32
 ## 危险品 hazard.mbt
 
 ```moonbit
-pub fn HazardClass::parse(text : String) -> HazardClass
+pub fn HazardClass::parse(text : String) -> HazardClass?
 pub fn Hazard::new(class : HazardClass, un : String, group : PackingGroup) -> Hazard
-pub fn segregation_level(a : HazardClass, b : HazardClass) -> Int32
-pub fn clearance_for_level(level : Int32) -> Int32
-pub fn segregation_label(level : Int32) -> String
+pub fn Hazard::with_declaration(Self, reference : String) -> Hazard
+pub fn HazardReview::new(LoadUnit, Array[Cargo], Array[HazardPairRule], String, String, String) -> HazardReview
+pub fn assess_hazards(LoadUnit, Array[Cargo], StowRules) -> Array[Violation]
+pub fn planning_scope(LoadPlan) -> String
 ```
 
-16×16 隔离表按 IMDG 7.2.4 的形态压缩成 0–4 五级，对应净距 0/3/6/12/24 m。
-爆炸品一行一律给 4 级（24 m），这是有意保守：宁可把货留在箱外，也不给一个
-"看起来合规"的错误答案。需要按航线细化时用 `StowRules::clearance` 覆盖某一级的毫米数。
+`HazardPairRule` 按完整 `Hazard` 值双向匹配，包含声明版本引用；`relation` 为
+`ProhibitSameUnit`（禁止同载具）或 `ReviewRequired`（具备规则后仍须人工复核）。
+`rule_id` 和 `source` 必须非空；默认无任何组合规则。多条匹配规则均检查，禁配不被覆盖。
+涉及任一危险品的所有货物组合（含与普通货的组合、同种货）都必须有具体规则。
+
+`StowRules.hazard_pairs` 接收规则；`hazard_review` 接收整单复核记录。
+构造复核记录的后三个字符串为记录编号、复核人和外部证据/运输条件引用，均须非空。
+记录复制完整货单、载具与规则快照，后续改变任一快照内容都会使复核失效。
+外部条件（航线、船舶、开闭式 CTU、包装、数量、温控等）的核查与真实性由外部人员负责。
+
+未知关系、无效输入或缺少/失效复核一律是 `Error`。审核记录不能覆盖禁配或未知关系。
+即使只有一件危险品也要求声明引用和整单复核；成功仅为 `HazardPlanningOnly` 警示下的几何规划。
+`is_clear` 仅表示没有 `Error`，`pack_all` 的 `Some` 仅表示整单几何完成，均不是运输许可。
+`cartonize` 不对危险品自动分箱。JSON 作业单不支持导入复核凭据，解析成功仍默认阻断危险品。
+旧 `segregation_level` / `clearance_for_level` / `segregation_label` 和距离覆盖 API 已删除。
+`HazardClass::parse` 对未知值返回可选值 `None`，不把拼错类别改成普通货。
+详见 [HAZARD-REVIEW.md](HAZARD-REVIEW.md)。
 
 ## 装箱 pack.mbt
 
@@ -97,8 +121,8 @@ pub fn order_cargos(cargos : Array[Cargo]) -> Array[Int32]
 
 `pack` 是极值点启发式：每放一件货，就在它身上生成三个候选角点（沿 x、沿 y、往上），
 评分顺序是 低 z → 高支撑面积 → 小 x → 小 y。`order_cargos` 决定先放谁：
-重而大、限制多的先放。`pack_all` 在返回前跑一次配平，`pack_ordered` 供调用方自己
-安排顺序（例如按站点倒序）。
+站点小的、优先级高的、重量大的、体积大的先放，最后按id排序。`pack_all` 在返回前跑一次配平，`pack_ordered` 供调用方自己
+安排顺序；重复索引不重复装货，省略的货物进入unplaced，非法索引被跳过。
 
 ## 托盘码垛 palletize.mbt
 
@@ -120,8 +144,9 @@ pub fn volumetric_weight_g(dims : Dimensions) -> Int32
 pub fn chargeable_weight_g(spec : CartonSpec, goods_weight_g : Int32) -> Int32
 ```
 
-对每个纸箱规格各跑一次 `pack`，先比"装得下的件数"，再比运费（计费重 = max(实重,
-体积重)，体积重按 1 kg : 5000 cm³），最后比 id，保证同输入同结果。
+对每个纸箱规格按体积降序尝试加入货物，单件不合适时继续尝试其他货物；比较可装件数、
+箱材成本 `cost_cents`，最后比 id。结果的 `cargo_index` 指向原始 `goods`，不是子单下标。
+计费重API单独提供，未参与箱型排序，也没有承运人运费模型；体积重按1kg:5000cm³向上取整到克。
 
 ## 校验 verify.mbt
 
@@ -132,7 +157,7 @@ pub fn count_by_severity(violations : Array[Violation], severity : Severity) -> 
 ```
 
 八组检查：身份重复、几何越界与朝向、碰撞、支撑与堆叠顶载、载重与地板点载荷、
-轴荷与重心、危险品净距、后装先卸（overstow）。校验不依赖装箱器，手工写出的
+轴荷与重心、危险品整单复核、后装先卸（overstow）。校验不依赖装箱器，手工写出的
 `placements` 一样能查。
 
 ## 稳定性 stability.mbt
@@ -175,3 +200,18 @@ pub fn parse_scenario(text : String) -> Result[Scenario, String]
 把一个 JSON 作业单解析成 `LoadUnit` + `Array[Cargo]` + `StowRules`，格式见
 [JOB-FORMAT.md](JOB-FORMAT.md)。错误一律返回可读的字符串（缺字段、尺寸非正、未知载具），
 不做隐式兜底。
+
+## 数值、静力模型与完整性边界
+
+`validate_input` 拒绝非正或大于30000mm的边、负重量、无效规则、重复货号（由整单检查报告）、
+超过1000件或累计质量（含空载轴荷）大于2e9g、累计体积大于8e15mm³的规划作业。
+底面积为Int32，支撑率和轴荷力矩使用Int64中间值。选箱的单箱体积上限8e12mm³，总箱成本上限2e9分。
+
+顶载沿支撑图传播全部上层重量；跨多个底座的桥接货物，对每个可达底座都计入全部重量，
+是保守上界，不是弹性/接触力求解。地板压力包含经此图传递的载荷，不能替代真实接触点载荷测算。
+轴荷包括已声明的空载轴荷；轴距外货物全部归最近轴，未求解悬挑反力或动态载荷。
+默认货车的“有效载荷24t”和“空载12t”均为测试参数，不是36t总重的法定许可。
+
+自动规划先剪枝再最终verify，轴荷等整车条件可能在最终检查报错；不能宣称自动输出一定无错误。
+缺货是Error，`is_clear`不接受缺货布局；不完整规划仍可查看unplaced与诊断。
+必须同时检查 `unplaced`、`violations` 与 `planning_scope`；几何完成不等于现场装载或运输许可。
