@@ -82,7 +82,8 @@ Windows Native当前因运行时要求MSVC且本机为MinGW阻断；Wasm/WasmGC/
 | 代码提交 | `818d948`（危险品门控重写 + 净距语义 + 回归） |
 | 文档提交 | `1a9355b`；本记录随之提交 |
 | `moon check --deny-warn` | 0 error / 0 warning |
-| `moon test` | 72 passed / 0 failed（净距语义与堆叠各 1 项新增回归） |
+| `moon test` | wasm / wasm-gc / js 三个目标各 72 passed / 0 failed（净距语义与堆叠新增回归） |
+| `moon check --deny-warn --target all` | 通过（42 tasks） |
 | `moon fmt --check` | no work to do |
 | 六个示例 | quickstart / pallet / cartonize / multistop / hazard / verify 全部 exit 0 |
 | README 代码块 | 用同一段代码重跑，输出与 README 逐字节一致（3 of 3 件、1.792 m³、64.000 kg） |
