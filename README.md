@@ -50,12 +50,12 @@ pieces      3 of 3
 volume      1.792 of 33.195 (5.4%)
 weight      64.000 kg of 28.2 t (0.2%)
 floor       3.077 m2 footprint, stack 0.95 m
-centre      x 2.94 m, y 1.03 m, z 0.27 m
+centre      x 2.94 m, y 1.17 m, z 0.27 m
 
   #  cargo            stop layer orient  x         y         z         size                 kg
-  1  DESK                0     1 LWH     2228      102       0         1600x900x300         34.000 kg
-  2  TV-55               0     1 WLH     2228      1002      0         850x1350x780         22.000 kg
-  3  CHAIR               0     1 WLH     3078      1002      0         700x700x950          8.000 kg
+  1  DESK                0     1 LWH     2080      326       0         1600x900x300         34.000 kg
+  2  TV-55               0     1 LWH     2080      1226      0         1350x850x780         22.000 kg
+  3  CHAIR               0     1 LWH     3430      1226      0         700x700x950          8.000 kg
 ```
 
 ## 能做什么

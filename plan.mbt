@@ -111,15 +111,85 @@ pub fn center_of_gravity(
 }
 
 ///|
-/// Floor area actually touched by cargo, computed as the union area of the
-/// footprints of everything standing on the floor. A simple sweep over the X
-/// axis keeps it exact for the non-overlapping rectangles a verified plan has.
-pub fn floor_used_area(placements : Array[Placement]) -> Int64 {
-  let mut total = 0L
-  for p in placements {
-    if p.box.min.z == 0 {
-      total = total + p.footprint_mm2()
+/// Merged length of the given 1-D intervals, sorted by start first.
+fn union_length(spans : Array[(Int32, Int32)]) -> Int64 {
+  let n = spans.length()
+  if n == 0 {
+    return 0L
+  }
+  let sorted = spans.copy()
+  let mut i = 1
+  while i < n {
+    let item = sorted[i]
+    let mut j = i - 1
+    let mut done = false
+    while j >= 0 && !done {
+      if sorted[j].0 > item.0 {
+        sorted[j + 1] = sorted[j]
+        j = j - 1
+      } else {
+        done = true
+      }
     }
+    sorted[j + 1] = item
+    i = i + 1
+  }
+  let (first_start, first_end) = sorted[0]
+  let mut cur_start = first_start
+  let mut cur_end = first_end
+  let mut total = 0L
+  let mut k = 1
+  while k < n {
+    let (start, end) = sorted[k]
+    if start <= cur_end {
+      cur_end = max_i(cur_end, end)
+    } else {
+      total = total + (cur_end - cur_start).to_int64()
+      cur_start = start
+      cur_end = end
+    }
+    k = k + 1
+  }
+  total + (cur_end - cur_start).to_int64()
+}
+
+///|
+/// Floor area actually touched by cargo: the union of the footprints of
+/// everything standing on the floor. The X axis is cut at every footprint edge
+/// and the covered Y intervals of each strip are merged, so an overlapping or
+/// hand edited plan reports the area really covered instead of a sum that
+/// counts the same square twice.
+pub fn floor_used_area(placements : Array[Placement]) -> Int64 {
+  let floor_items : Array[Placement] = []
+  for p in placements {
+    if p.box.min.z == 0 && p.box.size.length > 0 && p.box.size.width > 0 {
+      floor_items.push(p)
+    }
+  }
+  if floor_items.length() == 0 {
+    return 0L
+  }
+  let xs : Array[Int32] = []
+  for p in floor_items {
+    xs.push(p.box.min.x)
+    xs.push(p.box.max_x())
+  }
+  sort_ints(xs)
+  let mut total = 0L
+  let mut i = 1
+  while i < xs.length() {
+    let x0 = xs[i - 1]
+    let x1 = xs[i]
+    if x1 > x0 {
+      let spans : Array[(Int32, Int32)] = []
+      for p in floor_items {
+        if p.box.min.x <= x0 && p.box.max_x() >= x1 {
+          spans.push((p.box.min.y, p.box.max_y()))
+        }
+      }
+      total = total + (x1 - x0).to_int64() * union_length(spans)
+    }
+    i = i + 1
   }
   total
 }

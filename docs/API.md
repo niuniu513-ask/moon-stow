@@ -114,15 +114,28 @@ pub fn planning_scope(LoadPlan) -> String
 
 ```moonbit
 pub fn pack(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan
+pub fn pack_best(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan
 pub fn pack_all(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan?
 pub fn pack_ordered(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules, order : Array[Int32]) -> LoadPlan
 pub fn order_cargos(cargos : Array[Cargo]) -> Array[Int32]
+pub fn order_cargos_by(cargos : Array[Cargo], key : OrderKey) -> Array[Int32]
+
+#derive(Eq) pub(all) enum OrderKey { Builtin VolumeDesc HeightDesc AreaDesc WeightDesc VolumeAsc }
+pub fn OrderKey::all() -> Array[OrderKey]
+pub fn OrderKey::label(self : OrderKey) -> String
 ```
 
 `pack` 是极值点启发式：每放一件货，就在它身上生成三个候选角点（沿 x、沿 y、往上），
-评分顺序是 低 z → 高支撑面积 → 小 x → 小 y。`order_cargos` 决定先放谁：
-站点小的、优先级高的、重量大的、体积大的先放，最后按id排序。`pack_all` 在返回前跑一次配平，`pack_ordered` 供调用方自己
-安排顺序；重复索引不重复装货，省略的货物进入unplaced，非法索引被跳过。
+评分顺序是 低 z → 高支撑面积 → 小 x → 小 y → 声明的朝向顺序（`LWH` 优先）。
+最后一级是值比较而不是迭代顺序，所以候选点列表怎么生成都不影响结果。`order_cargos` 决定先放谁：
+站点小的、优先级高的、重量大的、体积大的先放，最后按id排序。`pack_all` 在返回前跑一次配平，
+`pack_ordered` 供调用方自己安排顺序；重复索引不重复装货，省略的货物进入unplaced，非法索引被跳过。
+
+`pack_best` 是质量模式：对 `OrderKey::all()` 里的每个排序各装一次（每次再带两轮"重新尝试装不进的货"），
+然后取**装载件数最多**的那个方案；件数相同时取体积利用率高的，再相同取堆高低的。
+它比 `pack` 慢（实测 24 次运行 3.5 s，js 目标），但结果同样确定、可重放。
+装不进的货每轮都会被重试一次，因为每放一件都会多出新的极值点。
+口径差异与实测数字见 [QUALITY.md](QUALITY.md)。
 
 ## 托盘码垛 palletize.mbt
 

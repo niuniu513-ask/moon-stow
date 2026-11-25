@@ -252,8 +252,21 @@ fn Packer::commit(self : Packer, cargo_index : Int32, cand : Candidate) -> Unit 
 
 ///|
 /// Scoring: lowest layer first, then the best supported candidate, then the
-/// position closest to the door, then the smallest Y, then the earliest
-/// orientation. A strict total order keeps the output deterministic.
+/// position closest to the rear-left corner, then the declared orientation
+/// order. Every tie is broken by a value, never by the order in which the
+/// candidate list happens to be built, so the result is deterministic.
+fn orientation_rank(o : Orientation) -> Int32 {
+  match o {
+    LWH => 0
+    WLH => 1
+    LHW => 2
+    HLW => 3
+    WHL => 4
+    HWL => 5
+  }
+}
+
+///|
 fn better(a : Candidate, b : Candidate) -> Bool {
   if a.box.min.z != b.box.min.z {
     return a.box.min.z < b.box.min.z
@@ -267,10 +280,7 @@ fn better(a : Candidate, b : Candidate) -> Bool {
   if a.box.min.y != b.box.min.y {
     return a.box.min.y < b.box.min.y
   }
-  if a.box.min.z != b.box.min.z {
-    return a.box.min.z < b.box.min.z
-  }
-  true
+  orientation_rank(a.orientation) < orientation_rank(b.orientation)
 }
 
 ///|
@@ -333,11 +343,120 @@ pub fn order_cargos(cargos : Array[Cargo]) -> Array[Int32] {
 ///|
 /// Pack every cargo into the unit in the given order. Items that cannot be
 /// placed are reported with the reason, they are never silently dropped.
-pub fn pack_ordered(
+
+///|
+/// Try to place one cargo at the best position currently reachable. Every
+/// candidate comes from a point that a placed box already produced, so a
+/// failure here means the item really has no room left, not that the search
+/// gave up early.
+fn place_one(
+  packer : Packer,
+  points : Array[Point3],
+  cargo_index : Int32,
+) -> Bool {
+  if cargo_index < 0 || cargo_index >= packer.cargos.length() {
+    return false
+  }
+  let cargo = packer.cargos[cargo_index]
+  for slot in packer.placed {
+    // The stacking candidate sits exactly on the support face: a declared
+    // clearance is lateral, so it must not lift cargo off what carries it.
+    push_point(
+      points,
+      Point3::new(slot.box.min.x, slot.box.min.y, slot.box.max_z()),
+      packer.envelope,
+    )
+    let gap = max_i(
+      cargo.min_gap_mm,
+      packer.cargos[slot.cargo_index].min_gap_mm,
+    )
+    if gap > 0 {
+      push_point(
+        points,
+        Point3::new(slot.box.max_x() + gap, slot.box.min.y, slot.box.min.z),
+        packer.envelope,
+      )
+      push_point(
+        points,
+        Point3::new(slot.box.min.x, slot.box.max_y() + gap, slot.box.min.z),
+        packer.envelope,
+      )
+    }
+  }
+  let mut best : Candidate? = None
+  for o in cargo.upright.allowed() {
+    let od = cargo.dims.oriented(o)
+    for p in points {
+      let box = Aabb::at(p.x, p.y, p.z, od)
+      if !box.fits_within(packer.envelope) {
+        continue
+      }
+      if !packer.fits(cargo_index, box) {
+        continue
+      }
+      let supports = packer.supports_of_box(box)
+      let below : Array[Aabb] = []
+      for s in supports {
+        below.push(packer.placed[s].box)
+      }
+      let area = box.size.length * box.size.width
+      let supported = if area <= 0 {
+        0
+      } else {
+        (box.supported_area(below).to_int64() * 1000L / area.to_int64()).to_int()
+      }
+      let cand = {
+        box,
+        orientation: o,
+        layer: packer.layer_for(supports),
+        support_permille: supported,
+      }
+      best = match best {
+        None => Some(cand)
+        Some(current) =>
+          if better(cand, current) {
+            Some(cand)
+          } else {
+            Some(current)
+          }
+      }
+    }
+  }
+  match best {
+    Some(cand) => {
+      packer.commit(cargo_index, cand)
+      push_point(
+        points,
+        Point3::new(cand.box.max_x(), cand.box.min.y, cand.box.min.z),
+        packer.envelope,
+      )
+      push_point(
+        points,
+        Point3::new(cand.box.min.x, cand.box.max_y(), cand.box.min.z),
+        packer.envelope,
+      )
+      push_point(
+        points,
+        Point3::new(cand.box.min.x, cand.box.min.y, cand.box.max_z()),
+        packer.envelope,
+      )
+      true
+    }
+    None => false
+  }
+}
+
+///|
+/// Place every cargo in `order`, then re-attempt the failures: each placement
+/// adds new extreme points, so an item that had no room early in the run often
+/// fits once the unit is fuller. `rounds` bounds the retry passes and the loop
+/// stops as soon as a pass changes nothing.
+fn pack_rounds(
   unit : LoadUnit,
   cargos : Array[Cargo],
   rules : StowRules,
   order : Array[Int32],
+  rounds : Int32,
 ) -> LoadPlan {
   match blocked_plan(unit, cargos, rules) {
     Some(blocked) => return blocked
@@ -345,8 +464,8 @@ pub fn pack_ordered(
   }
   let packer = Packer::new(unit, cargos, rules)
   let points : Array[Point3] = [Point3::new(0, 0, 0)]
-  let unplaced : Array[Unplaced] = []
   let attempted : Array[Int32] = []
+  let mut failed : Array[Int32] = []
   for cargo_index in order {
     if cargo_index < 0 || cargo_index >= cargos.length() {
       continue
@@ -361,93 +480,31 @@ pub fn pack_ordered(
       continue
     }
     attempted.push(cargo_index)
-    let cargo = cargos[cargo_index]
-    for slot in packer.placed {
-      let gap = max_i(cargo.min_gap_mm, cargos[slot.cargo_index].min_gap_mm)
-      if gap > 0 {
-        push_point(
-          points,
-          Point3::new(slot.box.max_x() + gap, slot.box.min.y, slot.box.min.z),
-          packer.envelope,
-        )
-        push_point(
-          points,
-          Point3::new(slot.box.min.x, slot.box.max_y() + gap, slot.box.min.z),
-          packer.envelope,
-        )
-        // Stacking candidate: exactly on the top face. A lateral clearance must
-        // not lift cargo off its support, which would make it unsupported.
-        push_point(
-          points,
-          Point3::new(slot.box.min.x, slot.box.min.y, slot.box.max_z()),
-          packer.envelope,
-        )
+    if !place_one(packer, points, cargo_index) {
+      failed.push(cargo_index)
+    }
+  }
+  let mut round = 0
+  while round < rounds && failed.length() > 0 {
+    let next_failed : Array[Int32] = []
+    for idx in failed {
+      if !place_one(packer, points, idx) {
+        next_failed.push(idx)
       }
     }
-    let mut best : Candidate? = None
-    for o in cargo.upright.allowed() {
-      let od = cargo.dims.oriented(o)
-      for p in points {
-        let box = Aabb::at(p.x, p.y, p.z, od)
-        if !box.fits_within(packer.envelope) {
-          continue
-        }
-        if !packer.fits(cargo_index, box) {
-          continue
-        }
-        let supports = packer.supports_of_box(box)
-        let below : Array[Aabb] = []
-        for s in supports {
-          below.push(packer.placed[s].box)
-        }
-        let area = box.size.length * box.size.width
-        let supported = if area <= 0 {
-          0
-        } else {
-          (box.supported_area(below).to_int64() * 1000L / area.to_int64()).to_int()
-        }
-        let cand = {
-          box,
-          orientation: o,
-          layer: packer.layer_for(supports),
-          support_permille: supported,
-        }
-        best = match best {
-          None => Some(cand)
-          Some(current) =>
-            if better(cand, current) {
-              Some(cand)
-            } else {
-              Some(current)
-            }
-        }
-      }
+    if next_failed.length() == failed.length() {
+      round = rounds
+    } else {
+      failed = next_failed
+      round = round + 1
     }
-    match best {
-      Some(cand) => {
-        packer.commit(cargo_index, cand)
-        push_point(
-          points,
-          Point3::new(cand.box.max_x(), cand.box.min.y, cand.box.min.z),
-          packer.envelope,
-        )
-        push_point(
-          points,
-          Point3::new(cand.box.min.x, cand.box.max_y(), cand.box.min.z),
-          packer.envelope,
-        )
-        push_point(
-          points,
-          Point3::new(cand.box.min.x, cand.box.min.y, cand.box.max_z()),
-          packer.envelope,
-        )
-      }
-      None =>
-        unplaced.push({
-          cargo_id: cargo.id,
-          reason: "no feasible position left in the unit",
-        })
-    }
+  }
+  let unplaced : Array[Unplaced] = []
+  for idx in failed {
+    unplaced.push({
+      cargo_id: cargos[idx].id,
+      reason: "no feasible position left in the unit",
+    })
   }
   for i in 0..<cargos.length() {
     let mut seen = false
@@ -481,6 +538,18 @@ pub fn pack_ordered(
 }
 
 ///|
+/// Pack every cargo into the unit in the given order. Items that cannot be
+/// placed are reported with the reason, they are never silently dropped.
+pub fn pack_ordered(
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  rules : StowRules,
+  order : Array[Int32],
+) -> LoadPlan {
+  pack_rounds(unit, cargos, rules, order, 0)
+}
+
+///|
 /// Pack with the built in ordering (earliest stop, highest priority, heaviest,
 /// largest, id).
 pub fn pack(
@@ -489,6 +558,141 @@ pub fn pack(
   rules : StowRules,
 ) -> LoadPlan {
   pack_ordered(unit, cargos, rules, order_cargos(cargos))
+}
+
+///|
+/// Which deterministic sort a run places cargo in. `Builtin` is the key that
+/// `Cargo::sort_key` documents and that `pack` uses; the others trade a little
+/// delivery order for a tighter fill, which is what `pack_best` explores.
+#derive(Eq)
+pub(all) enum OrderKey {
+  Builtin
+  VolumeDesc
+  HeightDesc
+  AreaDesc
+  WeightDesc
+  VolumeAsc
+}
+
+///|
+pub fn OrderKey::label(self : OrderKey) -> String {
+  match self {
+    Builtin => "builtin"
+    VolumeDesc => "volume-desc"
+    HeightDesc => "height-desc"
+    AreaDesc => "area-desc"
+    WeightDesc => "weight-desc"
+    VolumeAsc => "volume-asc"
+  }
+}
+
+///|
+pub fn OrderKey::all() -> Array[OrderKey] {
+  [Builtin, VolumeDesc, HeightDesc, AreaDesc, WeightDesc, VolumeAsc]
+}
+
+///|
+fn order_metric(cargo : Cargo, key : OrderKey) -> Int64 {
+  match key {
+    Builtin | VolumeDesc | VolumeAsc => cargo.dims.volume_mm3()
+    HeightDesc => cargo.dims.height.to_int64()
+    AreaDesc => cargo.dims.length.to_int64() * cargo.dims.width.to_int64()
+    WeightDesc => cargo.weight_g.to_int64()
+  }
+}
+
+///|
+fn order_precedes(a : Cargo, b : Cargo, key : OrderKey) -> Bool {
+  let av = order_metric(a, key)
+  let bv = order_metric(b, key)
+  if av != bv {
+    return match key {
+      VolumeAsc => av < bv
+      _ => av > bv
+    }
+  }
+  a.id < b.id
+}
+
+///|
+fn sorted_indices(cargos : Array[Cargo], key : OrderKey) -> Array[Int32] {
+  let idx : Array[Int32] = []
+  for i in 0..<cargos.length() {
+    idx.push(i)
+  }
+  let n = idx.length()
+  let mut i = 1
+  while i < n {
+    let item = idx[i]
+    let mut j = i - 1
+    let mut done = false
+    while j >= 0 && !done {
+      if order_precedes(cargos[item], cargos[idx[j]], key) {
+        idx[j + 1] = idx[j]
+        j = j - 1
+      } else {
+        done = true
+      }
+    }
+    idx[j + 1] = item
+    i = i + 1
+  }
+  idx
+}
+
+///|
+/// Cargo indices in the order `key` asks for. Ties fall back to the cargo id, so
+/// the order is total and the packer stays deterministic whatever order the
+/// caller handed the cargo in.
+pub fn order_cargos_by(cargos : Array[Cargo], key : OrderKey) -> Array[Int32] {
+  match key {
+    Builtin => order_cargos(cargos)
+    _ => sorted_indices(cargos, key)
+  }
+}
+
+///|
+/// Prefer the plan that places more pieces, because "how much of my freight
+/// fits" is the question a planner asks first; on a tie prefer the plan that
+/// loads more volume, then the one that stays lower. A strict order keeps the
+/// choice of `pack_best` deterministic.
+fn better_plan(a : LoadPlan, b : LoadPlan) -> Bool {
+  if a.metrics.placed_count != b.metrics.placed_count {
+    return a.metrics.placed_count > b.metrics.placed_count
+  }
+  if a.metrics.used_volume_mm3 != b.metrics.used_volume_mm3 {
+    return a.metrics.used_volume_mm3 > b.metrics.used_volume_mm3
+  }
+  a.metrics.stack_height_mm < b.metrics.stack_height_mm
+}
+
+///|
+/// Quality mode: run the heuristic once per `OrderKey`, give every run two
+/// retry passes, and keep the plan that loads the most volume. It is slower than
+/// `pack` on purpose and just as deterministic, so a replayed job prints the
+/// same plan.
+pub fn pack_best(
+  unit : LoadUnit,
+  cargos : Array[Cargo],
+  rules : StowRules,
+) -> LoadPlan {
+  let mut best : LoadPlan? = None
+  for key in OrderKey::all() {
+    let plan = pack_rounds(unit, cargos, rules, order_cargos_by(cargos, key), 2)
+    best = match best {
+      None => Some(plan)
+      Some(current) =>
+        if better_plan(plan, current) {
+          Some(plan)
+        } else {
+          Some(current)
+        }
+    }
+  }
+  match best {
+    Some(plan) => plan
+    None => pack(unit, cargos, rules)
+  }
 }
 
 ///|

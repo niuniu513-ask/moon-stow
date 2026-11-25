@@ -99,3 +99,29 @@ moon fmt --check
 for e in quickstart pallet cartonize multistop hazard verify; do moon run examples/$e; done
 ```
 
+## 2026-11-25 装载质量模式与本轮验证
+
+本轮把"装得更多"从一句口号变成可复现的数字：新增 `pack_best`（六种排序 × 两轮重试，按件数、
+体积率、堆高取最优），并把 `floor_used_area` 改成真正的并集，`better()` 的朝向兜底改成
+文档一直声称的"声明顺序优先"。实测口径、完整表格与复现脚本在 [QUALITY.md](QUALITY.md)。
+
+| 项目 | 本轮结果 |
+|---|---|
+| `moon check --deny-warn` | 0 error / 0 warning |
+| `moon check --deny-warn --target all` | 通过 |
+| `moon test` | 76 passed / 0 failed（新增 `pack_best`、排序、地板并集回归） |
+| `moon fmt --check` | no work to do |
+| `moon info` 后 `pkg.generated.mbti` | 已重新生成，无残留差异 |
+| 六个示例 | quickstart / pallet / cartonize / multistop / hazard / verify 全部 exit 0 |
+| README 代码块 | 用同一段代码重跑，输出与 README 逐字节一致（`centre y 1.17 m`，三件 LWH） |
+| 质量对比 | 20ft 80 件：57 → 73 件（26.2% → 55.5%）；欧标托盘 160 件：6 → 27 件 |
+| 工具链 | `moonc v0.10.21+06da1ed44`；Native 仍需 MSVC，本机 MinGW 未能执行，不计作通过 |
+
+复现命令：
+
+```bash
+moon check --deny-warn --target all
+moon test
+moon fmt --check
+moon run examples/quickstart
+```

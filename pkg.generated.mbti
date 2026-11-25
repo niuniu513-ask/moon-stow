@@ -80,9 +80,13 @@ pub fn order_by_footprint(Array[Cargo]) -> Array[Int32]
 
 pub fn order_cargos(Array[Cargo]) -> Array[Int32]
 
+pub fn order_cargos_by(Array[Cargo], OrderKey) -> Array[Int32]
+
 pub fn pack(LoadUnit, Array[Cargo], StowRules) -> LoadPlan
 
 pub fn pack_all(LoadUnit, Array[Cargo], StowRules) -> LoadPlan?
+
+pub fn pack_best(LoadUnit, Array[Cargo], StowRules) -> LoadPlan
 
 pub fn pack_ordered(LoadUnit, Array[Cargo], StowRules, Array[Int32]) -> LoadPlan
 
@@ -374,6 +378,18 @@ pub fn LoadUnit::pallet_iso(String) -> Self
 pub fn LoadUnit::truck_rigid(String) -> Self
 pub fn LoadUnit::with_axles(Self, Array[Axle]) -> Self
 pub fn LoadUnit::with_payload(Self, Int32) -> Self
+
+#derive(Eq)
+pub(all) enum OrderKey {
+  Builtin
+  VolumeDesc
+  HeightDesc
+  AreaDesc
+  WeightDesc
+  VolumeAsc
+}
+pub fn OrderKey::all() -> Array[Self]
+pub fn OrderKey::label(Self) -> String
 
 #derive(Eq)
 pub(all) enum Orientation {
