@@ -115,6 +115,7 @@ pub fn planning_scope(LoadPlan) -> String
 ```moonbit
 pub fn pack(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan
 pub fn pack_best(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan
+pub fn pack_stops(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan
 pub fn pack_all(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules) -> LoadPlan?
 pub fn pack_ordered(unit : LoadUnit, cargos : Array[Cargo], rules : StowRules, order : Array[Int32]) -> LoadPlan
 pub fn order_cargos(cargos : Array[Cargo]) -> Array[Int32]
@@ -136,6 +137,15 @@ pub fn OrderKey::label(self : OrderKey) -> String
 它比 `pack` 慢（实测 24 次运行 3.5 s，js 目标），但结果同样确定、可重放。
 装不进的货每轮都会被重试一次，因为每放一件都会多出新的极值点。
 口径差异与实测数字见 [QUALITY.md](QUALITY.md)。
+
+`pack_stops` 是给多站点货单的：按投递站点把货厢长度切成若干段，每段只装本站点的那批货，
+按站点顺序排开，所以后站点的货永远不在前站点的货前面。段长先满足该站最长一件的长度，
+余下长度按各站体积分，段间留出整单最大的声明净距（留不下就不留，交给最后的校验裁决）。
+每段当作一个独立载具，用三条排序各装一遍、各带两轮重试，取件数最多的一份；拼回去后统一配平，
+再按拼好的支撑图重新写回每件的层号，超出层数上限的件从最高的位置开始剔除，
+被剔除的件进入 `unplaced`，原因写作 `column too tall once the final support graph was re-checked`。
+最后它和 `pack_best` 比一次：先比非 `MissingCargo` 的诊断条数（更干净的一方赢），
+再比装入件数、体积率、堆高。单站点货单直接走 `pack_best`，所以这个入口不会比它差。
 
 ## 托盘码垛 palletize.mbt
 

@@ -90,6 +90,8 @@ pub fn pack_best(LoadUnit, Array[Cargo], StowRules) -> LoadPlan
 
 pub fn pack_ordered(LoadUnit, Array[Cargo], StowRules, Array[Int32]) -> LoadPlan
 
+pub fn pack_stops(LoadUnit, Array[Cargo], StowRules) -> LoadPlan
+
 pub fn packing_group_of(String) -> PackingGroup
 
 pub fn pad_right(String, Int32) -> String
@@ -411,7 +413,7 @@ pub struct Packer {
   cargos : Array[Cargo]
   rules : StowRules
   envelope : Dimensions
-  placed : Array[Slot]
+  mut placed : Array[Slot]
   mut used_weight_g : Int32
 }
 pub fn Packer::new(LoadUnit, Array[Cargo], StowRules) -> Self

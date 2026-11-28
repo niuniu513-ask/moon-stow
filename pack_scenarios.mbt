@@ -304,3 +304,174 @@ test "plan: overlapping floor footprints are counted once" {
   ]
   assert_eq(floor_used_area(stacked), 1_000_000L)
 }
+
+///|
+/// Does the plan carry a finding of this kind?
+fn carries(violations : Array[Violation], kind : ViolationKind) -> Bool {
+  for v in violations {
+    if v.kind == kind {
+      return true
+    }
+  }
+  false
+}
+
+///|
+test "pack: layers are re-derived from the finished support graph" {
+  // A stands on the floor; D carries C so that C's top face lands at exactly the
+  // same height as A's. TOP was placed when A was its only support, which is one
+  // layer too low once C is under it as well.
+  let cargos : Array[Cargo] = [
+    Cargo::new("A", Dimensions::new(1000, 1000, 500), 50_000),
+    Cargo::new("D", Dimensions::new(1000, 1000, 250), 25_000),
+    Cargo::new("C", Dimensions::new(1000, 1000, 250), 25_000),
+    Cargo::new("TOP", Dimensions::new(2000, 1000, 500), 100_000),
+  ]
+  let placements : Array[Placement] = [
+    {
+      cargo_id: "A",
+      cargo_index: 0,
+      orientation: LWH,
+      box: Aabb::at(0, 0, 0, Dimensions::new(1000, 1000, 500)),
+      stop: 0,
+      layer: 1,
+    },
+    {
+      cargo_id: "D",
+      cargo_index: 1,
+      orientation: LWH,
+      box: Aabb::at(1000, 0, 0, Dimensions::new(1000, 1000, 250)),
+      stop: 0,
+      layer: 1,
+    },
+    {
+      cargo_id: "C",
+      cargo_index: 2,
+      orientation: LWH,
+      box: Aabb::at(1000, 0, 250, Dimensions::new(1000, 1000, 250)),
+      stop: 0,
+      layer: 2,
+    },
+    {
+      cargo_id: "TOP",
+      cargo_index: 3,
+      orientation: LWH,
+      box: Aabb::at(0, 0, 500, Dimensions::new(2000, 1000, 500)),
+      stop: 0,
+      layer: 2,
+    },
+  ]
+  let repaired = repair_layers(cargos, placements, StowRules::default())
+  assert_eq(repaired.length(), 4)
+  assert_eq(repaired[0].layer, 1)
+  assert_eq(repaired[1].layer, 1)
+  assert_eq(repaired[2].layer, 2)
+  // the stale stamp is lifted: two supports, the deeper one wins
+  assert_eq(repaired[3].layer, 3)
+  // and the corrected plan is what the verifier expects
+  let unit = LoadUnit::container_20ft("RESTAMP")
+  let violations = verify(unit, cargos, repaired, StowRules::default())
+  assert_false(carries(violations, PlacementMetadata))
+}
+
+///|
+test "pack: a column taller than its own limit loses its top box" {
+  let cap = 4
+  let cargos : Array[Cargo] = []
+  let placements : Array[Placement] = []
+  for i in 0..<5 {
+    let id = "K" + i.to_string()
+    cargos.push(
+      Cargo::new(id, Dimensions::new(1000, 1000, 500), 40_000).with_stack_limit(
+        cap, 400_000,
+      ),
+    )
+    placements.push({
+      cargo_id: id,
+      cargo_index: i,
+      orientation: LWH,
+      box: Aabb::at(0, 0, i * 500, Dimensions::new(1000, 1000, 500)),
+      stop: 0,
+      layer: i + 1,
+    })
+  }
+  let repaired = repair_layers(cargos, placements, StowRules::default())
+  assert_eq(repaired.length(), 4)
+  assert_eq(repaired[3].cargo_id, "K3")
+  for i in 0..<4 {
+    assert_eq(repaired[i].layer, i + 1)
+  }
+  let unit = LoadUnit::container_20ft("PRUNE")
+  assert_false(
+    carries(
+      verify(unit, cargos, repaired, StowRules::default()),
+      StackLayersExceeded,
+    ),
+  )
+}
+
+///|
+test "pack_stops: bands keep each stop usable and hand the rest out by volume" {
+  let lengths = band_lengths(12_000, [3_000, 2_000, 1_000], [6L, 3L, 1L])
+  assert_eq(lengths.length(), 3)
+  assert_true(lengths[0] >= 3_000)
+  assert_true(lengths[1] >= 2_000)
+  assert_true(lengths[2] >= 1_000)
+  let mut sum = 0
+  for l in lengths {
+    sum = sum + l
+  }
+  assert_eq(sum, 12_000)
+  // surplus follows volume, so a busier stop ends up wider
+  assert_true(lengths[0] > lengths[1])
+  assert_true(lengths[1] > lengths[2])
+  // when even the minimums do not fit, the length is shared instead of dropped
+  let tight = band_lengths(3_000, [3_000, 2_000, 1_000], [1L, 1L, 1L])
+  assert_eq(tight.length(), 3)
+  let mut tight_sum = 0
+  for l in tight {
+    tight_sum = tight_sum + l
+  }
+  assert_true(tight_sum <= 3_000)
+}
+
+///|
+test "pack: sectioned and interleaved plans both survive the audit" {
+  let rules = StowRules::default()
+  let cargos = quality_set(24)
+  let units : Array[LoadUnit] = [
+    LoadUnit::container_20ft("A20"),
+    LoadUnit::container_40hc("A40"),
+    LoadUnit::truck_rigid("T7"),
+    LoadUnit::pallet_eur("E1"),
+  ]
+  for unit in units {
+    let best = pack_best(unit, cargos, rules)
+    assert_false(carries(best.violations, PlacementMetadata))
+    assert_false(carries(best.violations, StackLayersExceeded))
+    assert_eq(
+      best.unplaced.length(),
+      cargos.length() - best.metrics.placed_count.to_int(),
+    )
+    let sectioned = pack_stops(unit, cargos, rules)
+    assert_false(carries(sectioned.violations, PlacementMetadata))
+    assert_false(carries(sectioned.violations, StackLayersExceeded))
+    // the sectioned mode is a candidate, never a regression
+    assert_true(sectioned.metrics.placed_count >= best.metrics.placed_count)
+    assert_eq(
+      sectioned.unplaced.length(),
+      cargos.length() - sectioned.metrics.placed_count.to_int(),
+    )
+  }
+}
+
+///|
+test "pack_stops: a single stop is the interleaved plan" {
+  let unit = LoadUnit::container_20ft("ONE")
+  let rules = StowRules::default()
+  let cargos = quality_set(12).map(fn(c) { c.with_stop(0) })
+  let interleaved = pack_best(unit, cargos, rules)
+  let sectioned = pack_stops(unit, cargos, rules)
+  assert_eq(sectioned.metrics.placed_count, interleaved.metrics.placed_count)
+  assert_eq(render_text(sectioned, cargos), render_text(interleaved, cargos))
+}

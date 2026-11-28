@@ -99,6 +99,39 @@ moon fmt --check
 for e in quickstart pallet cartonize multistop hazard verify; do moon run examples/$e; done
 ```
 
+## 2026-11-28 多站点分节装箱与层号复核
+
+本轮解决的是"多站点货单装不满"和"装箱器交出被自己校验器否掉的方案"两件事，都先量出根因再改。
+第一件：交错模式让后站点的货先占位、再被越站规则清掉，三站点的 40HC 因此丢掉约四分之一货单；
+`pack_stops` 改成按站点切纵断面、段内只装本站货。第二件：层号在放入时写入，之后一件货从下方滑进
+底面下方会给自己上方的箱子加一条支撑边、把它抬高一层，层号于是过期，`verify` 报
+`PlacementMetadata` / `StackLayersExceeded`；现在装箱结束按最终支撑图重写层号、传播层数上限、
+从最高处剔除超限件。口径、36 组完整表格与复现脚本在 [QUALITY.md](QUALITY.md)。
+
+| 项目 | 本轮结果 |
+|---|---|
+| `moon check --deny-warn` | 0 error / 0 warning |
+| `moon check --deny-warn --target all` | 通过（wasm / wasm-gc / js） |
+| `moon test` | 81 passed / 0 failed（新增 5 项：层号改正、超限剔除、段长分配、四种载具诊断为零、单站点等价） |
+| `moon test --target wasm-gc` / `--target js` | 81 passed / 81 passed |
+| `moon fmt --check` | no work to do |
+| `moon build --target js` | 通过 |
+| `moon info` 后 `pkg.generated.mbti` | 已重新生成（新增 `pack_stops`、`Packer.placed` 转为可变字段） |
+| 六个示例 | quickstart / pallet / cartonize / multistop / hazard / verify 全部 exit 0 |
+| 质量对比 | 40HC 160 件三站点 123 → 150 件（29.4% → 49.1%）；13.6m 厢车 133 → 151（28.6% → 42.8%）；托盘 80 件三站点 19 → 21 |
+| 审计不变量 | 36 组货单 × 两个模式共 72 份方案，非 `MissingCargo` 诊断全为 0（修复前厢车 160 件两站点一题 13 条） |
+| 分节耗时 | 72 次完整装箱 57.1 s（js 目标，本机） |
+| 工具链 | `moonc v0.10.21+06da1ed44`；Native 仍需 MSVC，本机 MinGW 未能执行，不计作通过 |
+
+复现命令：
+
+```bash
+moon check --deny-warn --target all
+moon test
+moon fmt --check
+for e in quickstart pallet cartonize multistop hazard verify; do moon run examples/$e; done
+```
+
 ## 2026-11-25 装载质量模式与本轮验证
 
 本轮把"装得更多"从一句口号变成可复现的数字：新增 `pack_best`（六种排序 × 两轮重试，按件数、
